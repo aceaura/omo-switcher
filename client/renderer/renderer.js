@@ -1,6 +1,8 @@
 // 渲染层逻辑：仅通过 window.api（preload 暴露）与主进程/服务端交互。
 const $ = (id) => document.getElementById(id);
-const api = window.api;
+// 注意：preload 通过 contextBridge 暴露的 window.api 已是全局名 `api`，
+// 不能再 `const api = ...`（会触发 "Identifier 'api' has already been declared"）。
+// 下方代码直接引用全局 `api`。
 
 let state = null;          // /api/state
 let remoteItems = [];      // 远端配置项清单

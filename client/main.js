@@ -91,6 +91,17 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  // 把渲染层 console 与 preload 错误转发到主进程 stdout，便于排查。
+  win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    console.log(`[renderer:${level}] ${message} (${sourceId}:${line})`);
+  });
+  win.webContents.on('preload-error', (_e, preloadPath, err) => {
+    console.error('[preload-error]', preloadPath, err);
+  });
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error('[did-fail-load]', code, desc, url);
+  });
+
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
