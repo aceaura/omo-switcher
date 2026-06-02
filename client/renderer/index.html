@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+  <title>omo-switcher</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header id="statusbar">
+    <span class="brand">omo-switcher</span>
+    <span id="conn" class="pill pill-muted">未连接</span>
+    <span id="store" class="pill pill-muted">store: ?</span>
+    <span id="activeTier" class="pill pill-muted">当前档位: ?</span>
+    <span id="activeWarn" class="pill pill-warn hidden"></span>
+  </header>
+
+  <main>
+    <!-- 设置：服务器同步地址 -->
+    <section class="card">
+      <h2>设置</h2>
+      <div class="row">
+        <label>服务器同步地址</label>
+        <input id="serverUrl" type="text" placeholder="http://127.0.0.1:7600" />
+        <button id="saveUrl">保存</button>
+        <button id="testConn" class="secondary">测试连接</button>
+      </div>
+      <p class="hint">该地址与“当前档位”属本机私有设置，<b>不参与同步、不会被覆盖</b>。</p>
+    </section>
+
+    <!-- 档位切换 -->
+    <section class="card">
+      <h2>性能档位切换（omo 与 omo-slim 共享）</h2>
+      <div class="row">
+        <label>性能版本</label>
+        <select id="tierSelect"></select>
+        <button id="applyTier">应用</button>
+      </div>
+      <div id="switchLog" class="log"></div>
+    </section>
+
+    <!-- 重启 -->
+    <section class="card">
+      <h2>重启 opencode</h2>
+      <div class="row">
+        <label>工作目录</label>
+        <input id="restartCwd" type="text" placeholder="(默认 home)" />
+        <button id="restartBtn" class="danger">杀进程并新终端启动</button>
+      </div>
+      <div id="restartLog" class="log"></div>
+    </section>
+
+    <!-- 同步 -->
+    <section class="card">
+      <h2>配置同步（本地 ↔ 远端）</h2>
+      <div class="row">
+        <span>方向：</span>
+        <label><input type="radio" name="dir" value="pull" checked /> 拉取 远端→本地</label>
+        <label><input type="radio" name="dir" value="push" /> 推送 本地→远端</label>
+        <span class="spacer"></span>
+        <label>远端版本：</label>
+        <select id="snapSelect"><option value="">最新(head)</option></select>
+        <button id="reloadSync" class="secondary">刷新</button>
+        <button id="importLocal" class="secondary" title="从服务端扫描本机文件填充本地 SQLite">导入本机</button>
+      </div>
+      <div class="grid2">
+        <div>
+          <h3>本地 (SQLite)</h3>
+          <table id="localTable"><thead><tr><th></th><th>文件</th><th>sha</th></tr></thead><tbody></tbody></table>
+        </div>
+        <div>
+          <h3>远端</h3>
+          <table id="remoteTable"><thead><tr><th>文件</th><th>sha</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="selectAll" /> 全选</label>
+        <span class="spacer"></span>
+        <button id="syncBtn">同步选中项…</button>
+      </div>
+      <div id="diffLegend" class="hint"></div>
+    </section>
+
+    <!-- 历史版本 -->
+    <section class="card">
+      <h2>远端历史版本</h2>
+      <button id="reloadSnaps" class="secondary">刷新历史</button>
+      <table id="snapTable"><thead><tr><th>时间</th><th>id</th><th>备注</th><th>文件数</th><th>操作</th></tr></thead><tbody></tbody></table>
+      <div id="snapDetail"></div>
+    </section>
+  </main>
+
+  <!-- 确认弹窗 -->
+  <dialog id="confirmDlg">
+    <h3 id="confirmTitle">确认同步</h3>
+    <div id="confirmBody" class="log"></div>
+    <div class="row right">
+      <button id="confirmCancel" class="secondary">取消</button>
+      <button id="confirmOk" class="danger">确认执行</button>
+    </div>
+  </dialog>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

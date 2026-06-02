@@ -1,0 +1,17 @@
+{
+  "name": "omo-switcher",
+  "version": "0.1.0",
+  "private": true,
+  "description": "切换 omo (oh-my-openagent) 与 omo-slim (oh-my-opencode-slim) 的性能/消耗配置，并一键重启 opencode",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "install:all": "npm --prefix server install && npm --prefix client install",
+    "server": "npm --prefix server start",
+    "dev:server": "npm --prefix server run dev",
+    "client": "npm --prefix client start"
+  },
+  "license": "MIT"
+}

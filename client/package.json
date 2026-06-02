@@ -1,0 +1,19 @@
+{
+  "name": "omo-switcher-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "omo-switcher Electron 客户端：性能档位切换 / 重启 / 本地↔远端同步 / 历史版本",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "electron-rebuild -f -w better-sqlite3 || echo 'electron-rebuild skipped'"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
+    "electron": "^33.0.0"
+  },
+  "license": "MIT"
+}
