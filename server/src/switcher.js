@@ -5,6 +5,7 @@ import path from 'node:path';
 import { config } from './config.js';
 import { getState, resolveSwitch } from './presets.js';
 import { setCurrent, pushHistory } from './store.js';
+import { validateTierFile } from './validate.js';
 
 // 安全校验：from/to 必须位于 opencodeDir 内（防目录穿越）。
 function assertInside(file) {
@@ -23,6 +24,21 @@ export async function applyTier(slug) {
   } catch (err) {
     await pushHistory({ tier: slug, ok: false, detail: err.message });
     throw err;
+  }
+
+  // 写入前先整体校验所有档位源文件：任一损坏即整批中止，绝不污染生效配置。
+  // （字节复制本身不改内容，但若源文件本就损坏会把坏配置带进 base。）
+  for (const step of plan) {
+    assertInside(step.from);
+    if (!fs.existsSync(step.from)) continue; // 缺失留给下方主流程报错
+    const { ok, errors } = validateTierFile(step.from, config.opencodeDir);
+    if (!ok) {
+      const detail = `档位文件校验失败：${path.basename(step.from)}\n  - ${errors.join('\n  - ')}`;
+      await pushHistory({ tier: slug, ok: false, detail });
+      const e = new Error(detail);
+      e.log = [`[reject] ${path.basename(step.from)}: ${errors.length} 处问题`];
+      throw e;
+    }
   }
 
   // 记录每条的备份，用于回滚。
