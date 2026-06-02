@@ -15,6 +15,8 @@ void main() {
     expect(find.text('omo-switcher'), findsOneWidget);
     expect(find.text('工作目录: /tmp/opencode'), findsOneWidget);
     expect(find.text('balanced'), findsOneWidget);
+    expect(find.text('当前配置文件'), findsOneWidget);
+    expect(find.text('oh-my-openagent.json'), findsOneWidget);
 
     await tester.tap(find.text('应用到工作目录'));
     await tester.pumpAndSettle();
@@ -77,6 +79,26 @@ void main() {
     await tester.tap(find.text('同步到本地仓库'));
     await tester.pumpAndSettle();
     expect(store.items.containsKey('balanced'), isTrue);
+
+    await tester.tap(find.text('本地历史'));
+    await tester.pumpAndSettle();
+    expect(find.text('本地历史'), findsWidgets);
+    expect(find.textContaining('2026-06-02'), findsWidgets);
+    await tester.tap(find.text('同步到本地仓库').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认执行'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('已从本地历史覆盖本地仓库'), findsOneWidget);
+
+    await tester.tap(find.text('远端历史'));
+    await tester.pumpAndSettle();
+    expect(find.text('远端历史'), findsWidgets);
+    expect(find.textContaining('2026-06-02'), findsWidgets);
+    await tester.tap(find.text('同步到云端仓库').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认执行'));
+    await tester.pumpAndSettle();
+    expect(api.rollbackCalls, ['/api/snapshots/snap-1/rollback']);
   });
 }
 
@@ -107,6 +129,7 @@ class FakeApi implements OmoApi {
               'label': '均衡 · Balanced',
               'index': 3,
               'shared': true,
+              'files': ['oh-my-openagent.json', 'oh-my-opencode-slim.json'],
             },
           ],
     'active': {'shared': empty ? '' : 'balanced'},
@@ -221,7 +244,11 @@ class FakeApi implements OmoApi {
   Future<Map<String, dynamic>> snapshot(String serverUrl, String id) async => {
     'ok': true,
     'items': [
-      {'key': 'balanced', 'sha256': 'abcdef1234567890'},
+      {
+        'key': 'balanced',
+        'contentB64': 'zip-b64',
+        'sha256': 'abcdef1234567890',
+      },
     ],
   };
 
@@ -247,6 +274,7 @@ class MemoryStore implements LocalStore {
 
   final Map<String, String> settings;
   final Map<String, ConfigItem> items = {};
+  final List<MapEntry<HistoryEntry, List<ConfigItem>>> history = [];
 
   @override
   Future<String?> getSetting(String key) async => settings[key];
@@ -263,5 +291,44 @@ class MemoryStore implements LocalStore {
 
   @override
   Future<void> upsertItem(ConfigItem item, String source) async =>
-      items[item.key] = item.copyWith(source: source);
+      replaceItems([
+        for (final existing in items.values)
+          if (existing.key != item.key) existing,
+        item,
+      ], source);
+
+  @override
+  Future<void> replaceItems(List<ConfigItem> nextItems, String source) async {
+    items
+      ..clear()
+      ..addEntries(
+        nextItems.map(
+          (item) => MapEntry(item.key, item.copyWith(source: source)),
+        ),
+      );
+    history.insert(
+      0,
+      MapEntry(
+        HistoryEntry(
+          id: '${history.length + 1}',
+          ts: DateTime.utc(2026, 6, 2, 10, history.length),
+          keys: nextItems.map((item) => item.key).toList(),
+          note: source,
+        ),
+        nextItems,
+      ),
+    );
+  }
+
+  @override
+  Future<List<HistoryEntry>> listSnapshots() async =>
+      history.map((entry) => entry.key).toList();
+
+  @override
+  Future<List<ConfigItem>> snapshotItems(String id) async {
+    for (final entry in history) {
+      if (entry.key.id == id) return entry.value;
+    }
+    return const [];
+  }
 }
