@@ -16,11 +16,14 @@ function shortSha(s) { return s ? s.slice(0, 8) : '—'; }
 
 // ---------- 启动 ----------
 async function boot() {
+  console.log('[boot] renderer start, api=' + (typeof api));
   $('serverUrl').value = (await api.getSetting('server_url')) || '';
   bindEvents();
+  console.log('[boot] events bound');
   await refreshState();
   await reloadSync();
   await reloadSnaps();
+  console.log('[boot] done, connected');
 }
 
 function bindEvents() {
