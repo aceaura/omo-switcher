@@ -7,7 +7,7 @@ const home = os.homedir();
 export const config = {
   // 监听端口（nginx 反代时指向这里）
   port: Number(process.env.OMO_SWITCHER_PORT || 7600),
-  host: process.env.OMO_SWITCHER_HOST || '127.0.0.1',
+  host: process.env.OMO_SWITCHER_HOST || '0.0.0.0',
 
   // opencode 配置目录（存放 oh-my-* 配置文件的地方）
   opencodeDir: process.env.OPENCODE_DIR || path.join(home, '.config', 'opencode'),

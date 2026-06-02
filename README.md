@@ -23,7 +23,7 @@ npm run install:all          # 安装 server 依赖
 flutter pub get client       # 安装 Flutter client 依赖
 
 # 服务端（无 Redis 也能跑：自动退回内存存储并告警）
-npm run server               # 默认 http://127.0.0.1:7600
+npm run server               # 默认 http://0.0.0.0:7600
 
 # 客户端（Flutter macOS）
 npm run client
@@ -43,6 +43,7 @@ curl http://127.0.0.1:7600/api/health
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `OMO_SWITCHER_PORT` | `7600` | 监听端口 |
+| `OMO_SWITCHER_HOST` | `0.0.0.0` | 监听地址；如只允许本机访问可设为 `127.0.0.1` |
 | `OPENCODE_DIR` | `~/.config/opencode` | opencode 配置目录 |
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Redis 地址 |
 | `REDIS_FALLBACK` | `1` | Redis 不可用时退回内存（`0` 禁用） |

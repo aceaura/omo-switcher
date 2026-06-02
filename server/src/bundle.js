@@ -67,7 +67,38 @@ async function readZipMetadata(slug, buf) {
 export async function buildTierBundle(slug) {
   const file = zipPath(slug);
   if (!fs.existsSync(file)) throw new Error(`档位 zip 不存在：${path.basename(file)}`);
-  return readZipMetadata(slug, redact(fs.readFileSync(file), path.basename(file)));
+  const buf = await completeZipBuffer(slug, fs.readFileSync(file));
+  return readZipMetadata(slug, redact(buf, path.basename(file)));
+}
+
+async function completeZipBuffer(slug, buf) {
+  const source = await JSZip.loadAsync(buf);
+  const zip = new JSZip();
+  const names = new Set();
+
+  for (const entry of Object.values(source.files)) {
+    if (entry.dir) continue;
+    assertAllowedZipEntry(slug, entry.name);
+    const name = normalizeBundleName(slug, entry.name);
+    zip.file(name, await entry.async('nodebuffer'), { date: FIXED_DATE, binary: true });
+    names.add(name);
+  }
+
+  for (const prov of Object.values(config.providers)) {
+    const activeName = `${prov.prefix}.json`;
+    if (names.has(activeName)) continue;
+    const activePath = path.join(config.opencodeDir, activeName);
+    if (!fs.existsSync(activePath)) continue;
+    zip.file(activeName, fs.readFileSync(activePath), { date: FIXED_DATE, binary: true });
+    names.add(activeName);
+  }
+
+  if (!names.size) throw new Error(`档位 "${slug}" 没有可读取的文件`);
+  return zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 },
+  });
 }
 
 function assertAllowedZipEntry(slug, name) {

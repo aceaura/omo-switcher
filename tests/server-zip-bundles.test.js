@@ -46,6 +46,29 @@ test('listTierBundles scans zip packages from the workspace directory', async ()
   assert.match(bundles[0].sha256, /^[a-f0-9]{64}$/);
 });
 
+test('buildTierBundle augments incomplete workspace packages from active provider files', async () => {
+  const dir = tempDir();
+  await setOpencodeDir(dir);
+  fs.writeFileSync(path.join(dir, 'oh-my-openagent.json'), '{"active":"omo"}');
+  fs.writeFileSync(path.join(dir, 'oh-my-opencode-slim.json'), '{"active":"slim"}');
+  await makeBundle(dir, 'balanced', {
+    'opencode.jsonc': '{}',
+    'tui.json': '{}',
+  });
+
+  const { buildTierBundle, extractTierBundle } = await importFresh('../server/src/bundle.js');
+  const bundle = await buildTierBundle('balanced');
+  const extracted = await extractTierBundle('balanced');
+
+  assert.deepEqual(bundle.files.sort(), ['oh-my-openagent.json', 'oh-my-opencode-slim.json', 'opencode.jsonc', 'tui.json']);
+  assert.deepEqual(extracted.entries.map((entry) => entry.name).sort(), [
+    'oh-my-openagent.json',
+    'oh-my-opencode-slim.json',
+    'opencode.jsonc',
+    'tui.json',
+  ]);
+});
+
 test('applyTier unzips a workspace package into active config files', async () => {
   const dir = tempDir();
   await setOpencodeDir(dir);

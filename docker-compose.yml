@@ -40,7 +40,7 @@ services:
       # 容器内 opencode 配置目录（由下方 volume 从宿主机挂入）。
       OPENCODE_DIR: /config/opencode
     ports:
-      - "127.0.0.1:7600:7600"
+      - "7600:7600"
     volumes:
       # 把宿主机的 opencode 配置目录挂进来；OPENCODE_DIR 可在外部用环境变量覆盖。
       - "${OPENCODE_DIR:-${HOME}/.config/opencode}:/config/opencode"
