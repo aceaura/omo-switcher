@@ -1,0 +1,49 @@
+# omo-switcher 服务端 + Redis 的本地编排。
+#
+# 用法：
+#   OPENCODE_DIR=$HOME/.config/opencode docker compose up -d --build
+#   curl http://127.0.0.1:7600/api/health
+#
+# 注意（容器化限制）：
+#   - 切换档位 / 配置同步 / 版本历史：完全可用（读写挂载进来的 opencode 配置目录）。
+#   - 「重启 opencode」(POST /api/restart)：依赖宿主机进程与 macOS osascript，
+#     容器内无法操作宿主 GUI/进程，会返回未实现或失败。请在宿主机手动重启 opencode，
+#     或仅把本服务用于「切换 + 同步」。
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: omo-switcher-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  server:
+    build:
+      context: ./server
+    container_name: omo-switcher-server
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      OMO_SWITCHER_HOST: 0.0.0.0
+      OMO_SWITCHER_PORT: "7600"
+      REDIS_URL: redis://redis:6379
+      REDIS_FALLBACK: "1"
+      # 容器内 opencode 配置目录（由下方 volume 从宿主机挂入）。
+      OPENCODE_DIR: /config/opencode
+    ports:
+      - "127.0.0.1:7600:7600"
+    volumes:
+      # 把宿主机的 opencode 配置目录挂进来；OPENCODE_DIR 可在外部用环境变量覆盖。
+      - "${OPENCODE_DIR:-${HOME}/.config/opencode}:/config/opencode"
+
+volumes:
+  redis-data:

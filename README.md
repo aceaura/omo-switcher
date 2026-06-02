@@ -36,6 +36,15 @@ npm run client
 > cd node_modules/better-sqlite3 && ../.bin/prebuild-install -r electron -t <electron版本>
 > ```
 
+### Docker（服务端 + Redis）
+```bash
+# 把宿主机的 opencode 配置目录挂入容器；OPENCODE_DIR 可覆盖
+OPENCODE_DIR=$HOME/.config/opencode docker compose up -d --build
+curl http://127.0.0.1:7600/api/health
+```
+- 切换档位 / 同步 / 版本历史：容器内完全可用（读写挂载进来的配置目录）。
+- **重启 opencode**（`POST /api/restart`）依赖宿主机进程与 macOS osascript，**容器内无法操作宿主 GUI/进程**，请在宿主机手动重启，或仅用容器做「切换 + 同步」。
+
 ### 环境变量（服务端）
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
