@@ -31,9 +31,20 @@ class MyApp extends StatelessWidget {
 
     return MaterialApp(
       title: 'omo-switcher',
+      debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.system,
-      theme: ThemeData(colorScheme: lightScheme, useMaterial3: true),
-      darkTheme: ThemeData(colorScheme: darkScheme, useMaterial3: true),
+      theme: ThemeData(
+        colorScheme: lightScheme,
+        useMaterial3: true,
+        visualDensity: VisualDensity.compact,
+        textTheme: const TextTheme(bodyMedium: TextStyle(fontSize: 12), bodySmall: TextStyle(fontSize: 11)),
+      ),
+      darkTheme: ThemeData(
+        colorScheme: darkScheme,
+        useMaterial3: true,
+        visualDensity: VisualDensity.compact,
+        textTheme: const TextTheme(bodyMedium: TextStyle(fontSize: 12), bodySmall: TextStyle(fontSize: 11)),
+      ),
       home: OmoSwitcherHome(api: api, store: store),
     );
   }
@@ -43,7 +54,7 @@ abstract class OmoApi {
   Future<Map<String, dynamic>> health(String serverUrl);
   Future<Map<String, dynamic>> state(String serverUrl);
   Future<Map<String, dynamic>> switchTier(String serverUrl, String tier);
-  Future<Map<String, dynamic>> restart(String serverUrl);
+  Future<Map<String, dynamic>> restart(String serverUrl, {String? launchCmd});
   Future<List<ConfigItem>> configItems(String serverUrl, {bool fs = false});
   Future<Map<String, dynamic>> configItem(String serverUrl, String key, {String? snapshot, bool fs = false});
   Future<Map<String, dynamic>> configDiff(String serverUrl, List<ConfigItem> localItems);
@@ -77,7 +88,8 @@ class HttpOmoApi implements OmoApi {
       _request('POST', serverUrl, '/api/switch', body: {'tier': tier});
 
   @override
-  Future<Map<String, dynamic>> restart(String serverUrl) => _request('POST', serverUrl, '/api/restart', body: <String, dynamic>{});
+  Future<Map<String, dynamic>> restart(String serverUrl, {String? launchCmd}) =>
+      _request('POST', serverUrl, '/api/restart', body: launchCmd != null ? <String, dynamic>{'launchCmd': launchCmd} : <String, dynamic>{});
 
   @override
   Future<List<ConfigItem>> configItems(String serverUrl, {bool fs = false}) async {
@@ -142,6 +154,7 @@ class FileLocalStore implements LocalStore {
   FileLocalStore({Directory? directory}) : _directory = directory ?? _defaultDirectory();
 
   final Directory _directory;
+  String get directoryPath => _directory.path;
 
   File get _settingsFile => File('${_directory.path}/settings.json');
   File get _itemsFile => File('${_directory.path}/config_items.json');
@@ -205,21 +218,20 @@ class OmoSwitcherHome extends StatefulWidget {
 
 class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   String serverUrl = 'http://127.0.0.1:7600';
-  String connectionText = '未连接';
-  String storeMode = 'store: ?';
-  String workspacePath = 'opencodeDir: ?';
+  String workspacePath = '工作目录: ?';
+  String localPath = '';
+  String connectionStatus = '未连接';
   String selectedTier = '';
   String selectedSnapshot = '';
   String switchLog = '';
-  String restartLog = '';
+  String restartDesktopLog = '';
+  String restartTuiLog = '';
   String localLog = '';
   int tabIndex = 0;
   List<Tier> tiers = [];
   List<ConfigItem> workspaceItems = [];
   List<ConfigItem> localItems = [];
   List<ConfigItem> remoteItems = [];
-  List<SnapshotInfo> snapshotItems = [];
-  List<ConfigItem> snapshotDetailItems = [];
   DiffResult diff = const DiffResult();
   DiffResult workspaceDiff = const DiffResult();
   final selectedWorkspace = <String>{};
@@ -242,30 +254,29 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   Future<void> _boot() async {
     serverUrl = await widget.store.getSetting('server_url') ?? serverUrl;
     serverUrlController.text = serverUrl;
+    if (widget.store is FileLocalStore) localPath = (widget.store as FileLocalStore).directoryPath;
     if (mounted) setState(() {});
     await _refreshAll();
   }
 
   Future<void> _refreshAll() async {
-    await Future.wait([_refreshState(), _reloadSync(), _reloadSnapshots()]);
+    await Future.wait([_refreshState(), _reloadSync()]);
   }
 
-  Future<void> _testConnection() async {
+  Future<void> _connectServer() async {
     final nextUrl = serverUrlController.text.trim();
     try {
       final result = await widget.api.health(nextUrl);
       if (result['ok'] == false) throw StateError(_messageFor(result));
       await widget.store.setSetting('server_url', nextUrl);
       serverUrl = nextUrl;
-      connectionText = '已连接';
-      storeMode = 'store: ${result['storeMode'] ?? '?'}';
+      connectionStatus = '已连接';
       if (mounted) setState(() {});
       await _refreshAll();
     } catch (error) {
-      setState(() {
-        connectionText = '未连接';
-        storeMode = 'store: ${_errorMessage(error)}';
-      });
+      connectionStatus = '连接失败';
+      remoteItems = [];
+      if (mounted) setState(() {});
     }
   }
 
@@ -281,7 +292,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         tiers = nextTiers;
         selectedTier = result['active'] is Map<String, dynamic> ? ((result['active'] as Map<String, dynamic>)['shared'] as String? ?? selectedTier) : selectedTier;
         if (selectedTier.isEmpty && tiers.isNotEmpty) selectedTier = tiers.first.slug;
-        workspacePath = 'opencodeDir: ${result['opencodeDir'] ?? '?'}';
+        workspacePath = '工作目录: ${result['opencodeDir'] ?? '?'}';
       });
     } catch (_) {}
   }
@@ -308,15 +319,6 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
     }
   }
 
-  Future<void> _reloadSnapshots() async {
-    try {
-      final result = await widget.api.snapshots(serverUrl);
-      setState(() => snapshotItems = _snapshotsFrom(result['items']));
-    } catch (_) {
-      setState(() => snapshotItems = []);
-    }
-  }
-
   Future<void> _applyTier() async {
     if (selectedTier.isEmpty) return;
     final confirmed = await _confirm('应用档位', '将把 omo 与 omo-slim 同时切换到「$selectedTier」。');
@@ -326,9 +328,44 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
     await _refreshState();
   }
 
-  Future<void> _restart() async {
+  Future<void> _restartDesktop() async {
     final result = await widget.api.restart(serverUrl);
-    setState(() => restartLog = result['ok'] == false ? '重启失败: ${_messageFor(result)}' : _logText(result));
+    setState(() => restartDesktopLog = result['ok'] == false ? '重启失败: ${_messageFor(result)}' : _logText(result));
+  }
+
+  Future<void> _restartTui() async {
+    final result = await widget.api.restart(serverUrl, launchCmd: 'opencode');
+    setState(() => restartTuiLog = result['ok'] == false ? '重启失败: ${_messageFor(result)}' : _logText(result));
+  }
+
+  Future<void> _syncCloudToWorkspace() async {
+    final keys = _defaultKeys(selectedRemote, remoteItems);
+    if (keys.isEmpty) return _notice('云端没有可同步的配置项');
+    final confirmed = await _confirm('同步到常用配置', '将把云端 ${keys.length} 个档位包写入工作目录。\n${keys.join('\n')}');
+    if (!confirmed) return;
+    for (final key in keys) {
+      final result = await widget.api.configItem(serverUrl, key, snapshot: selectedSnapshot.isEmpty ? null : selectedSnapshot);
+      if (result['contentB64'] != null) {
+        await widget.api.writeWorkspaceItem(serverUrl, key, result['contentB64'] as String);
+      }
+    }
+    _notice('已同步 ${keys.length} 项到工作目录');
+    await _refreshAll();
+  }
+
+  Future<void> _pushWorkspaceToRedis() async {
+    final keys = _defaultKeys(selectedWorkspace, workspaceItems);
+    if (keys.isEmpty) return _notice('工作目录没有可上传的配置项');
+    final confirmed = await _confirm('上传到 Redis', '将把工作目录中 ${keys.length} 个档位包直接上传到远端 Redis。\n${keys.join('\n')}');
+    if (!confirmed) return;
+    final items = <ConfigItem>[];
+    for (final key in keys) {
+      final result = await widget.api.configItem(serverUrl, key, fs: true);
+      items.add(ConfigItem.fromJson(result));
+    }
+    final result = await widget.api.pushConfig(serverUrl, items, 'workspace push');
+    setState(() => restartDesktopLog = result['ok'] == false ? '上传到 Redis 失败: ${_messageFor(result)}' : '已上传到 Redis: ${result['snapshotId']}');
+    await _refreshAll();
   }
 
   Future<void> _downloadWorkspaceToLocal() async {
@@ -390,25 +427,6 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
     await _refreshAll();
   }
 
-  Future<void> _viewSnapshot(String id) async {
-    final result = await widget.api.snapshot(serverUrl, id);
-    setState(() => snapshotDetailItems = _itemsFrom(result['items']));
-  }
-
-  Future<void> _rollbackAll(String id) async {
-    if (!await _confirm('整体回滚', '整体回滚到快照 $id？将生成一个新快照并设为最新。')) return;
-    final result = await widget.api.rollbackSnapshot(serverUrl, id);
-    _notice(result['ok'] == false ? '回滚失败' : '回滚完成: ${result['snapshotId']}');
-    await _refreshAll();
-  }
-
-  Future<void> _rollbackFile(String id, String key) async {
-    if (!await _confirm('单文件回滚', '从快照 $id 回滚单文件 $key？')) return;
-    final result = await widget.api.rollbackFile(serverUrl, id, key);
-    _notice(result['ok'] == false ? '回滚失败' : '单文件回滚完成: ${result['snapshotId']}');
-    await _refreshAll();
-  }
-
   Future<bool> _confirm(String title, String body) async {
     return await showDialog<bool>(
           context: context,
@@ -432,22 +450,29 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      _WorkspacePage(
+      _ConfigPage(
         path: workspacePath,
         tiers: tiers,
         selectedTier: selectedTier,
+        switchLog: switchLog,
+        restartDesktopLog: restartDesktopLog,
+        restartTuiLog: restartTuiLog,
+        onTierChanged: (value) => setState(() => selectedTier = value),
+        onApplyTier: _applyTier,
+        onRestartDesktop: _restartDesktop,
+        onRestartTui: _restartTui,
+      ),
+      _WorkspaceSyncPage(
+        path: workspacePath,
         items: workspaceItems,
         diff: workspaceDiff,
         selected: selectedWorkspace,
-        switchLog: switchLog,
-        restartLog: restartLog,
-        onTierChanged: (value) => setState(() => selectedTier = value),
         onSelectedChanged: (key, checked) => setState(() => checked ? selectedWorkspace.add(key) : selectedWorkspace.remove(key)),
-        onApplyTier: _applyTier,
-        onDownload: _downloadWorkspaceToLocal,
-        onRestart: _restart,
+        onSyncToSqlite: _downloadWorkspaceToLocal,
+        onSyncToRedis: _pushWorkspaceToRedis,
       ),
       _LocalPage(
+        path: localPath,
         items: localItems,
         diff: diff,
         selected: selectedLocal,
@@ -457,41 +482,22 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onPushRedis: _pushLocalToRedis,
       ),
       _RemotePage(
+        serverUrl: serverUrl,
+        connectionStatus: connectionStatus,
         serverUrlController: serverUrlController,
+        onTestConnection: _connectServer,
         items: remoteItems,
         diff: diff,
         selected: selectedRemote,
-        snapshots: snapshotItems,
-        selectedSnapshot: selectedSnapshot,
         onSelectedChanged: (key, checked) => setState(() => checked ? selectedRemote.add(key) : selectedRemote.remove(key)),
-        onSnapshotChanged: (value) => setState(() => selectedSnapshot = value),
-        onTestConnection: _testConnection,
-        onPull: _pullRedisToLocal,
-        onReload: _refreshAll,
-      ),
-      _HistoryPage(
-        snapshots: snapshotItems,
-        detailItems: snapshotDetailItems,
-        onReload: _reloadSnapshots,
-        onView: _viewSnapshot,
-        onRollbackAll: _rollbackAll,
-        onRollbackFile: _rollbackFile,
+        onSyncToWorkspace: _syncCloudToWorkspace,
+        onSyncToLocal: _pullRedisToLocal,
       ),
     ];
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('omo-switcher'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: Chip(label: Text(connectionText)),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: Center(child: Text(storeMode)),
-          ),
-        ],
       ),
       body: Row(
         children: [
@@ -499,11 +505,12 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
             selectedIndex: tabIndex,
             onDestinationSelected: (index) => setState(() => tabIndex = index),
             labelType: NavigationRailLabelType.all,
+            groupAlignment: -0.9,
             destinations: const [
-              NavigationRailDestination(icon: Icon(Icons.folder_copy_outlined), label: Text('工作区')),
-              NavigationRailDestination(icon: Icon(Icons.storage_outlined), label: Text('SQLite')),
-              NavigationRailDestination(icon: Icon(Icons.cloud_outlined), label: Text('Redis')),
-              NavigationRailDestination(icon: Icon(Icons.history_outlined), label: Text('历史')),
+              NavigationRailDestination(icon: Icon(Icons.tune_outlined), label: Text('当前配置')),
+              NavigationRailDestination(icon: Icon(Icons.folder_copy_outlined), label: Text('常用配置')),
+              NavigationRailDestination(icon: Icon(Icons.storage_outlined), label: Text('本地仓库')),
+              NavigationRailDestination(icon: Icon(Icons.cloud_outlined), label: Text('云端仓库')),
             ],
           ),
           const VerticalDivider(width: 1),
@@ -514,73 +521,119 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 }
 
-class _WorkspacePage extends StatelessWidget {
-  const _WorkspacePage({
+class _ConfigPage extends StatelessWidget {
+  const _ConfigPage({
     required this.path,
     required this.tiers,
     required this.selectedTier,
-    required this.items,
-    required this.diff,
-    required this.selected,
     required this.switchLog,
-    required this.restartLog,
+    required this.restartDesktopLog,
+    required this.restartTuiLog,
     required this.onTierChanged,
-    required this.onSelectedChanged,
     required this.onApplyTier,
-    required this.onDownload,
-    required this.onRestart,
+    required this.onRestartDesktop,
+    required this.onRestartTui,
   });
 
   final String path;
   final List<Tier> tiers;
   final String selectedTier;
-  final List<ConfigItem> items;
-  final DiffResult diff;
-  final Set<String> selected;
   final String switchLog;
-  final String restartLog;
+  final String restartDesktopLog;
+  final String restartTuiLog;
   final ValueChanged<String> onTierChanged;
-  final void Function(String key, bool checked) onSelectedChanged;
   final VoidCallback onApplyTier;
-  final VoidCallback onDownload;
-  final VoidCallback onRestart;
+  final VoidCallback onRestartDesktop;
+  final VoidCallback onRestartTui;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
-      title: '本地工作区',
+      title: '当前配置',
+      count: '${tiers.length} 档',
+      children: [
+        Text(path),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                border: Border.all(color: Theme.of(context).colorScheme.outline),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: selectedTier.isEmpty && tiers.isNotEmpty ? tiers.first.slug : selectedTier.isEmpty ? null : selectedTier,
+                  isDense: true,
+                  items: tiers.map((tier) => DropdownMenuItem(value: tier.slug, child: Text(tier.slug))).toList(),
+                  onChanged: (value) {
+                    if (value != null) onTierChanged(value);
+                  },
+                ),
+              ),
+            ),
+            FilledButton(onPressed: onApplyTier, child: const Text('应用到工作目录')),
+            FilledButton.tonalIcon(onPressed: onRestartDesktop, icon: const Icon(Icons.desktop_windows_outlined), label: const Text('重启 Desktop')),
+            FilledButton.tonalIcon(onPressed: onRestartTui, icon: const Icon(Icons.terminal_outlined), label: const Text('重启 TUI')),
+          ],
+        ),
+        _LogBox(text: switchLog),
+        _LogBox(text: restartDesktopLog),
+        _LogBox(text: restartTuiLog),
+      ],
+    );
+  }
+}
+
+class _WorkspaceSyncPage extends StatelessWidget {
+  const _WorkspaceSyncPage({
+    required this.path,
+    required this.items,
+    required this.diff,
+    required this.selected,
+    required this.onSelectedChanged,
+    required this.onSyncToSqlite,
+    required this.onSyncToRedis,
+  });
+
+  final String path;
+  final List<ConfigItem> items;
+  final DiffResult diff;
+  final Set<String> selected;
+  final void Function(String key, bool checked) onSelectedChanged;
+  final VoidCallback onSyncToSqlite;
+  final VoidCallback onSyncToRedis;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PageShell(
+      title: '常用配置',
       count: '${items.length} 项',
       children: [
         Text(path),
+        const SizedBox(height: 8),
         Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 6,
+          runSpacing: 6,
           children: [
-            const Text('当前档位'),
-            DropdownButton<String>(
-              value: selectedTier.isEmpty && tiers.isNotEmpty ? tiers.first.slug : selectedTier.isEmpty ? null : selectedTier,
-              items: tiers.map((tier) => DropdownMenuItem(value: tier.slug, child: Text('${tier.index}. ${tier.label}'))).toList(),
-              onChanged: (value) {
-                if (value != null) onTierChanged(value);
-              },
-            ),
-            FilledButton(onPressed: onApplyTier, child: const Text('应用到工作目录')),
-            OutlinedButton(onPressed: onDownload, child: const Text('下载选中到 SQLite')),
-            FilledButton.tonalIcon(onPressed: onRestart, icon: const Icon(Icons.restart_alt), label: const Text('重启 Desktop')),
+            OutlinedButton(onPressed: onSyncToSqlite, child: const Text('同步到本地仓库')),
+            OutlinedButton(onPressed: onSyncToRedis, child: const Text('同步到云端仓库')),
           ],
         ),
         _ConfigList(items: items, diff: diff, selected: selected, onSelectedChanged: onSelectedChanged),
-        _LogBox(text: switchLog),
-        _LogBox(text: restartLog),
       ],
     );
   }
 }
 
 class _LocalPage extends StatelessWidget {
-  const _LocalPage({required this.items, required this.diff, required this.selected, required this.log, required this.onSelectedChanged, required this.onUploadWorkspace, required this.onPushRedis});
+  const _LocalPage({required this.path, required this.items, required this.diff, required this.selected, required this.log, required this.onSelectedChanged, required this.onUploadWorkspace, required this.onPushRedis});
 
+  final String path;
   final List<ConfigItem> items;
   final DiffResult diff;
   final Set<String> selected;
@@ -592,13 +645,19 @@ class _LocalPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _PageShell(
-      title: '本地 SQLite zip 仓库',
+      title: '本地仓库',
       count: '${items.length} 项',
       children: [
-        Wrap(spacing: 8, children: [
-          OutlinedButton(onPressed: onUploadWorkspace, child: const Text('上传选中到工作目录')),
-          OutlinedButton(onPressed: onPushRedis, child: const Text('上传选中到 Redis')),
-        ]),
+        if (path.isNotEmpty) Text(path),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+          OutlinedButton(onPressed: onUploadWorkspace, child: const Text('同步到常用配置')),
+          OutlinedButton(onPressed: onPushRedis, child: const Text('同步到云端仓库')),
+          ],
+        ),
         _ConfigList(items: items, diff: diff, selected: selected, onSelectedChanged: onSelectedChanged),
         _LogBox(text: log),
       ],
@@ -608,99 +667,65 @@ class _LocalPage extends StatelessWidget {
 
 class _RemotePage extends StatelessWidget {
   const _RemotePage({
+    required this.serverUrl,
+    required this.connectionStatus,
     required this.serverUrlController,
+    required this.onTestConnection,
     required this.items,
     required this.diff,
     required this.selected,
-    required this.snapshots,
-    required this.selectedSnapshot,
     required this.onSelectedChanged,
-    required this.onSnapshotChanged,
-    required this.onTestConnection,
-    required this.onPull,
-    required this.onReload,
+    required this.onSyncToWorkspace,
+    required this.onSyncToLocal,
   });
 
+  final String serverUrl;
+  final String connectionStatus;
   final TextEditingController serverUrlController;
+  final VoidCallback onTestConnection;
   final List<ConfigItem> items;
   final DiffResult diff;
   final Set<String> selected;
-  final List<SnapshotInfo> snapshots;
-  final String selectedSnapshot;
   final void Function(String key, bool checked) onSelectedChanged;
-  final ValueChanged<String> onSnapshotChanged;
-  final VoidCallback onTestConnection;
-  final VoidCallback onPull;
-  final VoidCallback onReload;
+  final VoidCallback onSyncToWorkspace;
+  final VoidCallback onSyncToLocal;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
-      title: '远端服务器 / Redis zip 仓库',
+      title: '云端仓库',
       count: '${items.length} 项',
       children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
+        Row(
           children: [
-            SizedBox(width: 320, child: TextField(controller: serverUrlController, decoration: const InputDecoration(labelText: '同步地址'))),
-            FilledButton(onPressed: onTestConnection, child: const Text('连接')),
-            DropdownButton<String>(
-              value: selectedSnapshot,
-              items: [
-                const DropdownMenuItem(value: '', child: Text('最新(head)')),
-                ...snapshots.map((snap) => DropdownMenuItem(value: snap.id, child: Text('${snap.timeText} · ${snap.note.isEmpty ? snap.id : snap.note}'))),
-              ],
-              onChanged: (value) => onSnapshotChanged(value ?? ''),
+            Expanded(
+              child: TextField(
+                controller: serverUrlController,
+                decoration: const InputDecoration(
+                  labelText: '仓库地址',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                ),
+                style: const TextStyle(fontSize: 12),
+              ),
             ),
-            OutlinedButton(onPressed: onPull, child: const Text('下载选中到 SQLite')),
-            OutlinedButton(onPressed: onReload, child: const Text('刷新三层')),
+            const SizedBox(width: 8),
+            FilledButton(onPressed: onTestConnection, child: const Text('连接')),
+            const SizedBox(width: 8),
+            Text(connectionStatus, style: TextStyle(color: connectionStatus == '已连接' ? Colors.green : Theme.of(context).colorScheme.error, fontSize: 12)),
           ],
         ),
-        const Text('该地址属于本机私有设置，不参与同步、不会被覆盖。'),
-        Text('SQLite↔Redis：仅 SQLite ${diff.onlyLocal.length} · 仅 Redis ${diff.onlyRemote.length} · 有差异 ${diff.changed.length} · 相同 ${diff.same.length}'),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            OutlinedButton(onPressed: onSyncToWorkspace, child: const Text('同步到常用配置')),
+            OutlinedButton(onPressed: onSyncToLocal, child: const Text('同步到本地仓库')),
+          ],
+        ),
         _ConfigList(items: items, diff: diff, selected: selected, onSelectedChanged: onSelectedChanged),
-      ],
-    );
-  }
-}
-
-class _HistoryPage extends StatelessWidget {
-  const _HistoryPage({required this.snapshots, required this.detailItems, required this.onReload, required this.onView, required this.onRollbackAll, required this.onRollbackFile});
-
-  final List<SnapshotInfo> snapshots;
-  final List<ConfigItem> detailItems;
-  final VoidCallback onReload;
-  final ValueChanged<String> onView;
-  final ValueChanged<String> onRollbackAll;
-  final void Function(String id, String key) onRollbackFile;
-
-  @override
-  Widget build(BuildContext context) {
-    return _PageShell(
-      title: '远端历史版本',
-      count: '${snapshots.length} 项',
-      children: [
-        Align(alignment: Alignment.centerLeft, child: OutlinedButton(onPressed: onReload, child: const Text('刷新历史'))),
-        for (final snap in snapshots)
-          Card(
-            child: ListTile(
-              title: Text(snap.id),
-              subtitle: Text('${snap.timeText} · ${snap.note} · ${snap.keys.length} 文件'),
-              trailing: Wrap(spacing: 8, children: [
-                OutlinedButton(onPressed: () => onView(snap.id), child: const Text('查看')),
-                FilledButton.tonal(onPressed: () => onRollbackAll(snap.id), child: const Text('整体回滚')),
-              ]),
-            ),
-          ),
-        if (detailItems.isNotEmpty) const Divider(),
-        for (final item in detailItems)
-          ListTile(
-            title: Text(item.key),
-            subtitle: Text(shortSha(item.sha256)),
-            trailing: FilledButton.tonal(onPressed: snapshots.isEmpty ? null : () => onRollbackFile(snapshots.first.id, item.key), child: const Text('单文件回滚')),
-          ),
       ],
     );
   }
@@ -716,17 +741,17 @@ class _PageShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(10),
       children: [
         Row(
           children: [
-            Text(title, style: Theme.of(context).textTheme.headlineSmall),
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
             const Spacer(),
-            Chip(label: Text(count)),
+            if (count.isNotEmpty) Chip(label: Text(count), visualDensity: VisualDensity.compact),
           ],
         ),
-        const SizedBox(height: 12),
-        ...children.expand((child) => [child, const SizedBox(height: 12)]),
+        const SizedBox(height: 8),
+        ...children.expand((child) => [child, const SizedBox(height: 8)]),
       ],
     );
   }
@@ -743,10 +768,23 @@ class _ConfigList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) return const Text('0 项');
+    final allSelected = items.isNotEmpty && items.every((item) => selected.contains(item.key));
     return Card(
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
+          CheckboxListTile(
+            value: allSelected,
+            onChanged: (checked) {
+              for (final item in items) {
+                onSelectedChanged(item.key, checked ?? false);
+              }
+            },
+            title: Text('全选', style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.w600)),
+            dense: true,
+            controlAffinity: ListTileControlAffinity.leading,
+          ),
+          const Divider(height: 1),
           for (final item in items)
             CheckboxListTile(
               value: selected.contains(item.key),
@@ -869,22 +907,6 @@ class ConfigItem {
       };
 }
 
-class SnapshotInfo {
-  const SnapshotInfo({required this.id, required this.timeText, required this.note, required this.keys});
-
-  final String id;
-  final String timeText;
-  final String note;
-  final List<String> keys;
-
-  factory SnapshotInfo.fromJson(Map<String, dynamic> json) => SnapshotInfo(
-        id: json['id'] as String? ?? '',
-        timeText: json['ts'] == null ? '' : DateTime.tryParse(json['ts'].toString())?.toLocal().toString() ?? json['ts'].toString(),
-        note: json['note'] as String? ?? '',
-        keys: (json['keys'] as List<dynamic>? ?? const []).map((key) => key.toString()).toList(),
-      );
-}
-
 class DiffResult {
   const DiffResult({this.onlyLocal = const [], this.onlyRemote = const [], this.changed = const [], this.same = const []});
 
@@ -923,19 +945,17 @@ class DiffResult {
   }
 
   String labelFor(String key) {
-    if (onlyLocal.contains(key)) return '仅 SQLite';
-    if (onlyRemote.contains(key)) return '仅目标';
+    if (onlyLocal.contains(key)) return '仅本地';
+    if (onlyRemote.contains(key)) return '仅云端';
     if (changed.contains(key)) return '有差异';
     return '';
   }
 }
 
 List<ConfigItem> _itemsFrom(Object? items) => (items as List<dynamic>? ?? const []).map((item) => ConfigItem.fromJson(item as Map<String, dynamic>)).toList();
-List<SnapshotInfo> _snapshotsFrom(Object? items) => (items as List<dynamic>? ?? const []).map((item) => SnapshotInfo.fromJson(item as Map<String, dynamic>)).toList();
 List<String> _strings(Object? value) => (value as List<dynamic>? ?? const []).map((item) => item.toString()).toList();
 List<String> _defaultKeys(Set<String> selected, List<ConfigItem> items) => selected.isNotEmpty ? selected.toList() : items.map((item) => item.key).toList();
 String shortSha(String? value) => value == null || value.isEmpty ? '—' : value.substring(0, value.length < 8 ? value.length : 8);
 String _normalizeServerUrl(String value) => (value.trim().isEmpty ? 'http://127.0.0.1:7600' : value.trim()).replaceFirst(RegExp(r'/+$'), '');
 String _messageFor(Map<String, dynamic> result) => result['error'] is Map<String, dynamic> ? ((result['error'] as Map<String, dynamic>)['message']?.toString() ?? jsonEncode(result)) : jsonEncode(result);
 String _logText(Map<String, dynamic> result) => result['log'] is List<dynamic> ? (result['log'] as List<dynamic>).join('\n') : jsonEncode(result);
-String _errorMessage(Object error) => error is Error ? error.toString() : error.toString();

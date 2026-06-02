@@ -138,43 +138,6 @@ app.post(
   })
 );
 
-// ---- 版本历史 / 回滚 (FR-4) ----
-app.get(
-  '/api/snapshots',
-  h(async (req, res) => {
-    const limit = Number(req.query.limit || 50);
-    ok(res, await versions.listSnapshots(limit));
-  })
-);
-
-app.get(
-  '/api/snapshots/:id',
-  h(async (req, res) => {
-    const snap = await versions.getSnapshot(req.params.id);
-    if (!snap) return fail(res, 'NOT_FOUND', `无快照 ${req.params.id}`, 404);
-    ok(res, snap);
-  })
-);
-
-app.post(
-  '/api/snapshots/:id/rollback',
-  h(async (req, res) => {
-    const snapshotId = await versions.rollbackAll(req.params.id, { note: req.body?.note });
-    ok(res, { snapshotId });
-  })
-);
-
-app.post(
-  '/api/snapshots/:id/rollback-file',
-  h(async (req, res) => {
-    const { key, note } = req.body || {};
-    if (!key) return fail(res, 'BAD_PARAM', '缺少 key');
-    if (!isAllowedKey(key)) return fail(res, 'BAD_KEY', `非法 key: ${key}`);
-    const snapshotId = await versions.rollbackFile(req.params.id, key, { note });
-    ok(res, { snapshotId });
-  })
-);
-
 app.use((_req, res) => fail(res, 'NOT_FOUND', 'route not found', 404));
 
 app.listen(config.port, config.host, () => {
