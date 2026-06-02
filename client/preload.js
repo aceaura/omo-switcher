@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // 服务端 REST 透传
   call: (method, path, body) => ipcRenderer.invoke('api:call', method, path, body),
+  testConnection: (serverUrl) => ipcRenderer.invoke('api:testConnection', serverUrl),
 
   // 本地 SQLite
   listLocalItems: () => ipcRenderer.invoke('db:listItems'),
@@ -18,5 +19,6 @@ contextBridge.exposeInMainWorld('api', {
   // 高层同步
   pull: (opts) => ipcRenderer.invoke('sync:pull', opts),
   push: (opts) => ipcRenderer.invoke('sync:push', opts),
-  importLocal: () => ipcRenderer.invoke('local:importFromServer'),
+  importLocal: (opts) => ipcRenderer.invoke('local:importFromServer', opts),
+  exportLocal: (opts) => ipcRenderer.invoke('local:exportToServer', opts),
 });

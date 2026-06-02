@@ -1,5 +1,5 @@
 // 同步辅助（FR-3）：同步单位为"档位包(zip)"，以 slug 为 key。
-import { listTierBundles, buildTierBundle, isAllowedSlug } from './bundle.js';
+import { listTierBundles, buildTierBundle, isAllowedSlug, writeTierBundle } from './bundle.js';
 
 // key 白名单：现在 key 即档位 slug。
 export function isAllowedKey(key) {
@@ -25,6 +25,10 @@ export async function scanLocalBundles() {
 export async function buildLocalBundle(slug) {
   const b = await buildTierBundle(slug);
   return { key: b.slug, ...b };
+}
+
+export async function applyLocalBundle(slug, contentB64) {
+  return writeTierBundle(slug, contentB64);
 }
 
 // 按 sha256 计算两组配置项差异（key 通用，对 slug 同样适用）。

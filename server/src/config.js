@@ -50,10 +50,11 @@ export const config = {
   restart: {
     // 用于匹配待杀进程的关键字（在进程命令行中查找）。
     killNeedle: process.env.RESTART_KILL_NEEDLE || 'opencode',
-    // 重新拉起 opencode 的命令（在新终端里执行）
-    launchCmd: process.env.RESTART_LAUNCH_CMD || 'opencode',
+    // 重启 Desktop 的命令
+    launchCmd: process.env.RESTART_LAUNCH_CMD || 'open -a OpenCode',
     // 新终端的工作目录
     launchCwd: process.env.RESTART_LAUNCH_CWD || home,
+    launchTimeoutMs: Number(process.env.RESTART_LAUNCH_TIMEOUT_MS || 8000),
   },
 };
 

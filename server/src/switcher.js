@@ -20,46 +20,41 @@ export async function applyTier(slug) {
   const log = [];
   let plan;
   try {
-    plan = resolveSwitch(slug); // [{providerId, from, to}] 通常 2 条
+    plan = await resolveSwitch(slug);
   } catch (err) {
     await pushHistory({ tier: slug, ok: false, detail: err.message });
     throw err;
   }
 
-  // 写入前先整体校验所有档位源文件：任一损坏即整批中止，绝不污染生效配置。
-  // （字节复制本身不改内容，但若源文件本就损坏会把坏配置带进 base。）
   for (const step of plan) {
-    assertInside(step.from);
-    if (!fs.existsSync(step.from)) continue; // 缺失留给下方主流程报错
-    const { ok, errors } = validateTierFile(step.from, config.opencodeDir);
+    assertInside(step.to);
+    if (!Object.values(config.providers).some((prov) => step.name === `${prov.prefix}.json`)) continue;
+    const tempFile = path.join(config.opencodeDir, `.omo-switcher-validate-${process.pid}-${step.name}`);
+    fs.writeFileSync(tempFile, step.content);
+    const { ok, errors } = validateTierFile(tempFile, config.opencodeDir);
+    fs.rmSync(tempFile, { force: true });
     if (!ok) {
-      const detail = `档位文件校验失败：${path.basename(step.from)}\n  - ${errors.join('\n  - ')}`;
+      const detail = `档位文件校验失败：${step.name}\n  - ${errors.join('\n  - ')}`;
       await pushHistory({ tier: slug, ok: false, detail });
       const e = new Error(detail);
-      e.log = [`[reject] ${path.basename(step.from)}: ${errors.length} 处问题`];
+      e.log = [`[reject] ${step.name}: ${errors.length} 处问题`];
       throw e;
     }
   }
 
-  // 记录每条的备份，用于回滚。
   const done = []; // { to, backup: Buffer|null, existed: bool }
 
   try {
     for (const step of plan) {
-      assertInside(step.from);
       assertInside(step.to);
-      if (!fs.existsSync(step.from)) {
-        throw new Error(`档位源文件不存在：${step.from}`);
-      }
       const existed = fs.existsSync(step.to);
       const backup = existed ? fs.readFileSync(step.to) : null;
 
-      fs.copyFileSync(step.from, step.to); // 字节级复制，保留 BOM/格式
+      fs.writeFileSync(step.to, step.content);
       done.push({ to: step.to, backup, existed });
-      log.push(`[ok] ${step.providerId}: ${path.basename(step.from)} -> ${path.basename(step.to)}`);
+      log.push(`[ok] ${slug}.zip -> ${path.basename(step.to)}`);
     }
   } catch (err) {
-    // 回滚所有已改动的 to。
     for (const d of done.reverse()) {
       try {
         if (d.existed && d.backup) fs.writeFileSync(d.to, d.backup);
@@ -77,6 +72,6 @@ export async function applyTier(slug) {
 
   await setCurrent(slug);
   await pushHistory({ tier: slug, ok: true });
-  const { active } = getState();
+  const { active } = await getState();
   return { ok: true, active, log };
 }

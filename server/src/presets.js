@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config, activeFileName } from './config.js';
+import { listTierBundles, extractTierBundle } from './bundle.js';
 
 // 解析形如 `oh-my-openagent.3-balanced.json` 的文件名。
 // 返回 { index, slug } 或 null。
@@ -21,77 +22,35 @@ function readBytes(file) {
   }
 }
 
-// 返回每个 provider 下所有档位文件： { [providerId]: Map<slug, {index, slug, file}> }
-function scanProviderTiers() {
-  const dir = config.opencodeDir;
-  let entries = [];
-  try {
-    entries = fs.readdirSync(dir);
-  } catch (err) {
-    throw new Error(`无法读取 opencode 配置目录 ${dir}: ${err.message}`);
-  }
-  const result = {};
-  for (const [providerId, prov] of Object.entries(config.providers)) {
-    const map = new Map();
-    for (const f of entries) {
-      const parsed = parseTierFile(prov.prefix, f);
-      if (parsed) map.set(parsed.slug, { ...parsed, file: path.join(dir, f) });
-    }
-    result[providerId] = map;
-  }
-  return result;
-}
-
-// 找出某 provider 当前生效的档位（base 文件与哪个档位文件字节一致）。
-function detectActive(prefix, tierMap) {
+function detectActive(prefix, bundles) {
   const baseFile = path.join(config.opencodeDir, activeFileName(prefix));
   const baseBytes = readBytes(baseFile);
   if (!baseBytes) return null;
-  for (const [slug, t] of tierMap) {
-    const b = readBytes(t.file);
-    if (b && b.equals(baseBytes)) return slug;
+  const memberName = activeFileName(prefix);
+  for (const bundle of bundles) {
+    const entry = bundle.entries.find((item) => item.name === memberName);
+    if (entry && entry.content.equals(baseBytes)) return bundle.slug;
   }
   return null;
 }
 
 // 汇总状态：tiers 是 omo / slim 共享的档位列表（按 index 排序），
 // active 给出每个 provider 当前档位及二者是否一致(shared)。
-export function getState() {
-  const perProvider = scanProviderTiers();
-
-  // 共享档位 = 所有 provider 都存在的 slug。
-  const providerIds = Object.keys(config.providers);
-  const slugCount = new Map();
-  for (const id of providerIds) {
-    for (const slug of perProvider[id].keys()) {
-      slugCount.set(slug, (slugCount.get(slug) || 0) + 1);
-    }
-  }
-
-  const tiers = [];
-  for (const [slug, count] of slugCount) {
-    const meta = config.tierMeta[slug] || { index: 999, label: slug, color: '#8b949e' };
-    const files = {};
-    for (const id of providerIds) {
-      const t = perProvider[id].get(slug);
-      files[id] = t ? path.basename(t.file) : null;
-    }
-    tiers.push({
-      slug,
-      index: meta.index,
-      label: meta.label,
-      color: meta.color,
-      shared: count === providerIds.length, // 两个 provider 都有 -> 可共享切换
-      files,
-    });
-  }
-  tiers.sort((a, b) => a.index - b.index);
-
+export async function getState() {
+  const bundles = [];
+  for (const item of await listTierBundles()) bundles.push(await extractTierBundle(item.slug));
+  const tiers = bundles.map((bundle) => ({
+    slug: bundle.slug,
+    index: bundle.index,
+    label: bundle.label,
+    color: bundle.color,
+    shared: true,
+    files: bundle.files,
+  }));
   const active = {};
-  for (const id of providerIds) {
-    active[id] = detectActive(config.providers[id].prefix, perProvider[id]);
+  for (const [id, prov] of Object.entries(config.providers)) {
+    active[id] = detectActive(prov.prefix, bundles);
   }
-  // 共享视角：omo 与 slim 档位一致时返回该 slug，否则 null（说明被手动改乱了）。
   const distinct = new Set(Object.values(active));
   active.shared = distinct.size === 1 ? [...distinct][0] : null;
 
@@ -103,20 +62,11 @@ export function getState() {
   };
 }
 
-// 取得某 provider 指定档位的源文件与目标(当前生效)文件路径。
-export function resolveSwitch(slug) {
-  const perProvider = scanProviderTiers();
-  const plan = [];
-  for (const [id, prov] of Object.entries(config.providers)) {
-    const tier = perProvider[id].get(slug);
-    if (!tier) {
-      throw new Error(`provider ${id} 不存在档位 "${slug}"`);
-    }
-    plan.push({
-      providerId: id,
-      from: tier.file,
-      to: path.join(config.opencodeDir, activeFileName(prov.prefix)),
-    });
-  }
-  return plan;
+export async function resolveSwitch(slug) {
+  const bundle = await extractTierBundle(slug);
+  return bundle.entries.map((entry) => ({
+    name: entry.name,
+    content: entry.content,
+    to: path.join(config.opencodeDir, entry.name),
+  }));
 }

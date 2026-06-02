@@ -5,12 +5,16 @@ const path = require('node:path');
 const db = require('./db.js');
 
 function serverUrl() {
-  return (db.getSetting('server_url') || 'http://127.0.0.1:7600').replace(/\/+$/, '');
+  return normalizeServerUrl(db.getSetting('server_url'));
+}
+
+function normalizeServerUrl(value) {
+  return String(value || 'http://127.0.0.1:7600').trim().replace(/\/+$/, '');
 }
 
 // 主进程统一发起 HTTP，避免渲染层 CORS / 暴露 token。
-async function apiCall(method, pathname, body) {
-  const url = serverUrl() + pathname;
+async function apiCall(method, pathname, body, baseUrl) {
+  const url = (baseUrl ? normalizeServerUrl(baseUrl) : serverUrl()) + pathname;
   const headers = { 'content-type': 'application/json' };
   const token = db.getSetting('auth_token');
   if (token) headers['authorization'] = `Bearer ${token}`;
@@ -26,6 +30,10 @@ async function apiCall(method, pathname, body) {
   return json;
 }
 
+async function testConnection(baseUrl) {
+  return apiCall('GET', '/api/health', undefined, baseUrl);
+}
+
 function registerIpc() {
   // 设置
   ipcMain.handle('settings:all', () => db.allSettings());
@@ -34,6 +42,7 @@ function registerIpc() {
 
   // 通用 HTTP 透传
   ipcMain.handle('api:call', (_e, method, pathname, body) => apiCall(method, pathname, body));
+  ipcMain.handle('api:testConnection', (_e, baseUrl) => testConnection(baseUrl));
 
   // 本地配置项（SQLite）
   ipcMain.handle('db:listItems', () => db.listConfigItems());
@@ -67,17 +76,35 @@ function registerIpc() {
   });
 
   // 从本机文件系统导入到 SQLite（首次填充本地配置项；走服务端扫描接口）
-  ipcMain.handle('local:importFromServer', async () => {
-    // 始终读"本机文件系统现状"(?fs=1)，把 4 个档位包灌入本地 SQLite。
+  ipcMain.handle('local:importFromServer', async (_e, opts = {}) => {
     const list = await apiCall('GET', '/api/config/items?fs=1');
+    const wanted = Array.isArray(opts.keys) && opts.keys.length ? new Set(opts.keys) : null;
     const imported = [];
     if (list.items) {
-      for (const meta of list.items) {
+      for (const meta of list.items.filter((item) => !wanted || wanted.has(item.key))) {
         const full = await apiCall('GET', `/api/config/item/${encodeURIComponent(meta.key)}?fs=1`);
         if (full.contentB64) { db.upsertConfigItem({ ...meta, ...full }, 'local-scan'); imported.push(meta.key); }
       }
     }
     return { ok: true, imported };
+  });
+
+  ipcMain.handle('local:exportToServer', async (_e, { keys }) => {
+    const exported = [];
+    const failed = [];
+    for (const key of keys) {
+      const it = db.getConfigItem(key);
+      if (!it) {
+        failed.push({ key, message: '本地 SQLite 中不存在' });
+        continue;
+      }
+      const r = await apiCall('POST', `/api/config/item/${encodeURIComponent(key)}/fs`, {
+        contentB64: it.content_b64,
+      });
+      if (r.ok === false) failed.push({ key, message: r.error?.message || '写回失败' });
+      else exported.push(key);
+    }
+    return { ok: failed.length === 0, exported, failed };
   });
 }
 
@@ -103,7 +130,8 @@ function createWindow() {
     console.error('[did-fail-load]', code, desc, url);
   });
 
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  win.webContents.openDevTools({ mode: "detach" });
+  win.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
 app.whenReady().then(() => {

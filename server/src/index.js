@@ -7,7 +7,7 @@ import { getState } from './presets.js';
 import { applyTier } from './switcher.js';
 import { restartOpencode } from './restart.js';
 import * as versions from './versions.js';
-import { scanLocalBundles, buildLocalBundle, diffItems, isAllowedKey } from './sync.js';
+import { scanLocalBundles, buildLocalBundle, applyLocalBundle, diffItems, isAllowedKey } from './sync.js';
 
 initStore();
 
@@ -29,7 +29,7 @@ const h = (fn) => (req, res) =>
 // ---- 状态 / 切换 / 重启 (FR-1 / FR-2) ----
 app.get('/api/health', h(async (_req, res) => ok(res, { storeMode: storeMode() })));
 
-app.get('/api/state', h(async (_req, res) => ok(res, getState())));
+app.get('/api/state', h(async (_req, res) => ok(res, await getState())));
 
 app.post(
   '/api/switch',
@@ -98,6 +98,17 @@ app.get(
     if (found) return ok(res, found);
     // 退回：实时打包本机该档位
     ok(res, await buildLocalBundle(key));
+  })
+);
+
+app.post(
+  '/api/config/item/:key/fs',
+  h(async (req, res) => {
+    const { key } = req.params;
+    if (!isAllowedKey(key)) return fail(res, 'BAD_KEY', `非法档位: ${key}`);
+    const { contentB64 } = req.body || {};
+    if (typeof contentB64 !== 'string') return fail(res, 'BAD_PARAM', `缺少 contentB64: ${key}`);
+    ok(res, await applyLocalBundle(key, contentB64));
   })
 );
 

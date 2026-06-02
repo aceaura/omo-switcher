@@ -5,61 +5,85 @@ const $ = (id) => document.getElementById(id);
 // 下方代码直接引用全局 `api`。
 
 let state = null;          // /api/state
+let workspaceItems = [];
 let remoteItems = [];      // 远端配置项清单
 let localItems = [];       // 本地 SQLite 配置项
 let diff = { onlyLocal: [], onlyRemote: [], changed: [], same: [] };
+let workspaceDiff = { onlyLocal: [], onlyRemote: [], changed: [], same: [] };
 
 function log(el, lines) {
   el.textContent = Array.isArray(lines) ? lines.join('\n') : String(lines);
 }
 function shortSha(s) { return s ? s.slice(0, 8) : '—'; }
+function errorMessage(err) { return err instanceof Error ? err.message : String(err); }
 
 // ---------- 启动 ----------
 async function boot() {
   console.log('[boot] renderer start, api=' + (typeof api));
   $('serverUrl').value = (await api.getSetting('server_url')) || '';
+  await loadTheme();
   bindEvents();
-  console.log('[boot] events bound');
   await refreshState();
   await reloadSync();
   await reloadSnaps();
-  console.log('[boot] done, connected');
 }
 
 function bindEvents() {
-  $('saveUrl').onclick = async () => {
-    await api.setSetting('server_url', $('serverUrl').value.trim());
-    await refreshState(); await reloadSync(); await reloadSnaps();
-  };
   $('testConn').onclick = testConn;
   $('applyTier').onclick = applyTier;
   $('restartBtn').onclick = restart;
   $('reloadSync').onclick = reloadSync;
-  $('importLocal').onclick = importLocal;
-  $('selectAll').onchange = (e) => {
-    document.querySelectorAll('#localTable input[type=checkbox]').forEach((c) => (c.checked = e.target.checked));
-  };
-  $('syncBtn').onclick = openSyncConfirm;
+  $('downloadWorkspace').onclick = downloadWorkspaceToLocal;
+  $('uploadWorkspace').onclick = uploadLocalToWorkspace;
+  $('pullRedis').onclick = pullRedisToLocal;
+  $('pushRedis').onclick = pushLocalToRedis;
   $('reloadSnaps').onclick = reloadSnaps;
   $('confirmCancel').onclick = () => $('confirmDlg').close();
+  // tab 切换
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.onclick = () => switchTab(btn.dataset.tab);
+  });
+  // 设置弹窗
+  $('settingsBtn').onclick = () => { $('themeSelect').value = document.documentElement.getAttribute('data-theme') || 'system'; $('settingsDlg').showModal(); };
+  $('settingsClose').onclick = () => $('settingsDlg').close();
+  $('themeSelect').onchange = () => setTheme($('themeSelect').value);
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === 'tab-' + name));
+}
+
+async function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  await api.setSetting('theme', theme);
+}
+
+async function loadTheme() {
+  const saved = (await api.getSetting('theme')) || 'system';
+  setTheme(saved);
 }
 
 // ---------- 连接 / 状态 ----------
 async function testConn() {
-  const r = await api.call('GET', '/api/health');
-  if (r.ok) {
-    $('conn').className = 'pill pill-ok'; $('conn').textContent = '已连接';
-    $('store').textContent = 'store: ' + r.storeMode;
-  } else {
-    $('conn').className = 'pill pill-bad'; $('conn').textContent = '连接失败';
+  const serverUrl = $('serverUrl').value.trim();
+  try {
+    const r = await api.testConnection(serverUrl);
+    if (r.ok) {
+      await api.setSetting('server_url', serverUrl);
+      await refreshState(); await reloadSync(); await reloadSnaps();
+      return;
+    }
+  } catch (err) {
+    // 连接失败
   }
 }
 
 async function refreshState() {
   const r = await api.call('GET', '/api/state');
-  if (r.ok === false) { $('conn').className = 'pill pill-bad'; $('conn').textContent = '连接失败'; return; }
+  if (r.ok === false) return;
   state = r;
-  $('conn').className = 'pill pill-ok'; $('conn').textContent = '已连接';
+  $('workspacePath').textContent = 'opencodeDir: ' + r.opencodeDir;
   // 档位下拉框
   const sel = $('tierSelect'); sel.innerHTML = '';
   for (const t of state.tiers.filter((t) => t.shared)) {
@@ -69,14 +93,7 @@ async function refreshState() {
   }
   // 当前档位 / 一致性
   const a = state.active;
-  if (a.shared) { sel.value = a.shared; $('activeTier').textContent = '当前档位: ' + a.shared; $('activeWarn').classList.add('hidden'); }
-  else {
-    $('activeTier').textContent = '当前档位: 不一致';
-    $('activeWarn').classList.remove('hidden');
-    $('activeWarn').textContent = `omo=${a.omo || '?'} / slim=${a['omo-slim'] || '?'}`;
-  }
-  await api.getSetting('store'); // noop keep
-  const h = await api.call('GET', '/api/health'); if (h.ok) $('store').textContent = 'store: ' + h.storeMode;
+  if (a.shared) { sel.value = a.shared; }
 }
 
 // ---------- 切换 ----------
@@ -90,23 +107,21 @@ async function applyTier() {
 
 // ---------- 重启 ----------
 async function restart() {
-  const cwd = $('restartCwd').value.trim() || undefined;
   log($('restartLog'), '执行中…');
-  const r = await api.call('POST', '/api/restart', { cwd });
+  const r = await api.call('POST', '/api/restart', {});
   log($('restartLog'), r.log || ['重启失败: ' + (r.error?.message || JSON.stringify(r))]);
 }
 
 // ---------- 同步 ----------
 async function reloadSync() {
-  // 远端清单
+  const workspace = await api.call('GET', '/api/config/items?fs=1');
+  workspaceItems = workspace.items || [];
   const remote = await api.call('GET', '/api/config/items');
   remoteItems = remote.items || [];
-  // 本地清单
   localItems = await api.listLocalItems();
-  // diff（按 sha）
   const dr = await api.call('POST', '/api/config/diff', { localItems });
   if (dr.ok) diff = dr.diff;
-  // 快照下拉
+  workspaceDiff = diffItems(localItems, workspaceItems);
   const snaps = await api.call('GET', '/api/snapshots?limit=50');
   const ss = $('snapSelect'); ss.innerHTML = '<option value="">最新(head)</option>';
   (snaps.items || []).forEach((s) => {
@@ -124,11 +139,32 @@ function tagFor(key) {
   return '';
 }
 
+function diffItems(leftItems, rightItems) {
+  const left = new Map(leftItems.map((item) => [item.key, item.sha256]));
+  const right = new Map(rightItems.map((item) => [item.key, item.sha256]));
+  const result = { onlyLocal: [], onlyRemote: [], changed: [], same: [] };
+  for (const [key, sha] of left) {
+    if (!right.has(key)) result.onlyLocal.push(key);
+    else if (right.get(key) !== sha) result.changed.push(key);
+    else result.same.push(key);
+  }
+  for (const key of right.keys()) if (!left.has(key)) result.onlyRemote.push(key);
+  return result;
+}
+
+function tagForDiff(key, targetDiff) {
+  if (targetDiff.onlyLocal.includes(key)) return '<span class="tag tag-onlyLocal">仅 SQLite</span>';
+  if (targetDiff.onlyRemote.includes(key)) return '<span class="tag tag-onlyRemote">仅目标</span>';
+  if (targetDiff.changed.includes(key)) return '<span class="tag tag-changed">有差异</span>';
+  return '';
+}
+
 // 档位元数据（label / 包含文件），用于把 slug 显示成可读名 + 悬浮看文件清单。
 function tierMeta(slug) {
+  const w = workspaceItems.find((i) => i.key === slug);
   const r = remoteItems.find((i) => i.key === slug);
   const l = localItems.find((i) => i.key === slug);
-  const src = r || l || {};
+  const src = w || r || l || {};
   return {
     label: src.label || slug,        // 如 "3. 均衡 · Balanced"
     files: src.files || [],          // zip 内文件名列表
@@ -136,70 +172,90 @@ function tierMeta(slug) {
 }
 
 // 只显示档位特征名（slug），并把完整 label 与所含文件放进 title 悬浮提示。
-function tierCell(slug) {
+function tierCell(slug, targetDiff = diff) {
   const { label, files } = tierMeta(slug);
   const title = `${label}\n包含 ${files.length} 个文件:\n` + files.map((f) => '  · ' + f).join('\n');
   const filesBadge = files.length ? `<span class="mono" style="opacity:.6"> (${files.length}个文件)</span>` : '';
-  return `<span title="${title.replace(/"/g, '&quot;')}"><b>${slug}</b>${filesBadge}</span> ${tagFor(slug)}`;
+  return `<span title="${title.replace(/"/g, '&quot;')}"><b>${slug}</b>${filesBadge}</span> ${tagForDiff(slug, targetDiff)}`;
 }
 
 function renderSyncTables() {
+  const wb = $('workspaceTable').querySelector('tbody'); wb.innerHTML = '';
+  for (const it of workspaceItems) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><input class="workspace-key" type="checkbox" data-key="${it.key}"></td>
+      <td>${tierCell(it.key, workspaceDiff)}</td><td class="mono">${shortSha(it.sha256)}</td>`;
+    wb.appendChild(tr);
+  }
   const lb = $('localTable').querySelector('tbody'); lb.innerHTML = '';
   for (const it of localItems) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td><input type="checkbox" data-key="${it.key}"></td>
-      <td>${tierCell(it.key)}</td><td class="mono">${shortSha(it.sha256)}</td>`;
+    tr.innerHTML = `<td><input class="local-key" type="checkbox" data-key="${it.key}"></td>
+      <td>${tierCell(it.key, diff)}</td><td class="mono">${shortSha(it.sha256)}</td>`;
     lb.appendChild(tr);
   }
   const rb = $('remoteTable').querySelector('tbody'); rb.innerHTML = '';
   for (const it of remoteItems) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${tierCell(it.key)}</td><td class="mono">${shortSha(it.sha256)}</td>`;
+    tr.innerHTML = `<td><input class="remote-key" type="checkbox" data-key="${it.key}"></td>
+      <td>${tierCell(it.key, diff)}</td><td class="mono">${shortSha(it.sha256)}</td>`;
     rb.appendChild(tr);
   }
+  $('workspaceCount').textContent = workspaceItems.length + ' 项';
+  $('localCount').textContent = localItems.length + ' 项';
+  $('remoteCount').textContent = remoteItems.length + ' 项';
   $('diffLegend').innerHTML =
-    `档位包(zip)差异：仅本地 ${diff.onlyLocal.length} · 仅远端 ${diff.onlyRemote.length} · 有差异 ${diff.changed.length} · 相同 ${diff.same.length}`;
+    `SQLite↔Redis：仅 SQLite ${diff.onlyLocal.length} · 仅 Redis ${diff.onlyRemote.length} · 有差异 ${diff.changed.length} · 相同 ${diff.same.length}`;
 }
 
-function selectedKeys() {
-  return [...document.querySelectorAll('#localTable input[type=checkbox]:checked')].map((c) => c.dataset.key);
-}
-function direction() {
-  return document.querySelector('input[name=dir]:checked').value;
+function selectedKeys(selector) {
+  return [...new Set([...document.querySelectorAll(selector + ':checked')].map((c) => c.dataset.key))];
 }
 
-async function importLocal() {
-  const r = await api.importLocal();
-  alert('已从本机导入 ' + (r.imported?.length || 0) + ' 项到本地 SQLite');
+function defaultKeys(selector, items) {
+  const keys = selectedKeys(selector);
+  return keys.length ? keys : items.map((item) => item.key);
+}
+
+async function downloadWorkspaceToLocal() {
+  const keys = defaultKeys('.workspace-key', workspaceItems);
+  if (!keys.length) { alert('工作目录没有可下载的配置项'); return; }
+  log($('localLog'), '从工作目录下载到 SQLite...');
+  const r = await api.importLocal({ keys });
+  log($('localLog'), r.ok !== false ? `已下载 ${r.imported?.length || 0} 项到 SQLite` : ('下载失败: ' + (r.error?.message || '')));
   await reloadSync();
 }
 
-function openSyncConfirm() {
-  const keys = selectedKeys();
-  if (!keys.length) { alert('请先勾选要同步的配置项'); return; }
-  const dir = direction();
+async function uploadLocalToWorkspace() {
+  const keys = defaultKeys('.local-key', localItems);
+  if (!keys.length) { alert('SQLite 没有可上传的配置项'); return; }
+  if (!confirm(`将把 SQLite 中 ${keys.length} 个档位包写回工作目录，确认？`)) return;
+  log($('localLog'), '上传 SQLite 到工作目录...');
+  const r = await api.exportLocal({ keys });
+  const failed = r.failed?.length ? '\n失败: ' + r.failed.map((item) => `${item.key}: ${item.message}`).join('\n') : '';
+  log($('localLog'), `已上传 ${r.exported?.length || 0} 项到工作目录${failed}`);
+  await reloadSync(); await refreshState();
+}
+
+async function pullRedisToLocal() {
+  const keys = defaultKeys('.remote-key', remoteItems);
+  if (!keys.length) { alert('Redis 没有可下载的配置项'); return; }
   const snap = $('snapSelect').value;
-  const scope = keys.length === localItems.length ? '全部' : '单项';
-  const body = [
-    `方向：${dir === 'pull' ? '拉取 远端→本地' : '推送 本地→远端'}`,
-    `范围：${scope}（${keys.length} 项）`,
-    dir === 'pull' && snap ? `远端版本：${snap}` : '',
-    '',
-    '将处理以下文件：',
-    ...keys.map((k) => '  · ' + k + ' ' + (diff.changed.includes(k) ? '(覆盖)' : '')),
-    '',
-    dir === 'pull' ? '注意：本地“当前档位/服务器地址”不会被改动。' : '将在远端生成一个新的时间戳快照。',
-  ].filter((x) => x !== null);
-  log($('confirmBody'), body);
-  $('confirmOk').onclick = async () => {
-    $('confirmDlg').close();
-    let r;
-    if (dir === 'pull') r = await api.pull({ keys, snapshot: snap || undefined });
-    else r = await api.push({ keys, note: `client ${scope} push` });
-    alert(r.ok !== false ? '同步完成' : ('同步失败: ' + (r.error?.message || '')));
-    await reloadSync(); await reloadSnaps();
-  };
-  $('confirmDlg').showModal();
+  log($('localLog'), '从 Redis 下载到 SQLite...');
+  const r = await api.pull({ keys, snapshot: snap || undefined });
+  log($('localLog'), r.ok !== false ? `已从 Redis 下载 ${r.pulled?.length || 0} 项到 SQLite` : ('下载失败: ' + (r.error?.message || '')));
+  await reloadSync();
+}
+
+async function pushLocalToRedis() {
+  const keys = defaultKeys('.local-key', localItems);
+  if (!keys.length) { alert('SQLite 没有可上传的配置项'); return; }
+  if (!confirm(`将在 Redis 生成新快照，包含 SQLite 中 ${keys.length} 个档位包，确认？`)) return;
+  log($('localLog'), '上传 SQLite 到 Redis...');
+  const scope = keys.length === localItems.length ? 'all' : 'selected';
+  const r = await api.push({ keys, note: `client ${scope} push` });
+  log($('localLog'), r.ok !== false ? `已上传到 Redis: ${r.snapshotId}` : ('上传失败: ' + (r.error?.message || '')));
+  await reloadSync(); await reloadSnaps();
 }
 
 // ---------- 历史版本 ----------
@@ -248,4 +304,4 @@ async function rollbackFile(id, key) {
   await reloadSnaps(); await reloadSync();
 }
 
-boot();
+if (!window.__OMO_SWITCHER_TEST__) boot();
