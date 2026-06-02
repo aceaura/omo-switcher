@@ -8,7 +8,7 @@
     "client"
   ],
   "scripts": {
-    "install:all": "npm --prefix server install && npm --prefix client install",
+    "install:all": "npm install",
     "server": "npm --prefix server start",
     "dev:server": "npm --prefix server run dev",
     "client": "npm --prefix client start"

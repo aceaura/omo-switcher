@@ -29,6 +29,13 @@ npm run client
 ```
 可选启用持久化版本库：`brew install redis && brew services start redis`。
 
+> **客户端原生模块**：`better-sqlite3` 需匹配 Electron 的 ABI。安装时 `client` 的 postinstall
+> 会调用 `scripts/rebuild-sqlite.cjs`，用 `prebuild-install` 拉取对应 Electron 版本的预编译二进制
+> （绕过 Node v25 下 `@electron/rebuild` 自带 yargs CLI 崩溃的问题）。若失败，手动执行：
+> ```bash
+> cd node_modules/better-sqlite3 && ../.bin/prebuild-install -r electron -t <electron版本>
+> ```
+
 ### 环境变量（服务端）
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
