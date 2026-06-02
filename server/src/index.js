@@ -7,7 +7,7 @@ import { getState } from './presets.js';
 import { applyTier } from './switcher.js';
 import { restartOpencode } from './restart.js';
 import * as versions from './versions.js';
-import { scanLocalConfigItems, diffItems, isAllowedKey } from './sync.js';
+import { scanLocalBundles, buildLocalBundle, diffItems, isAllowedKey } from './sync.js';
 
 initStore();
 
@@ -59,52 +59,56 @@ app.get(
 );
 
 // ---- 配置项 / 同步 (FR-3) ----
-// 远端“当前”配置项：优先取 head 快照；无快照则退回扫描本机文件系统。
+// 远端“当前”档位包清单(key=slug，不含 zip 内容)：优先 head 快照，无快照退回扫描本机。
 app.get(
   '/api/config/items',
-  h(async (_req, res) => {
+  h(async (req, res) => {
+    // ?fs=1 强制扫描本机文件系统(用于"导入本机")；否则取远端 head 快照，无则退回扫描。
+    if (req.query.fs === '1') {
+      return ok(res, { source: 'filesystem', items: await scanLocalBundles() });
+    }
     let items = await versions.getCurrentItems();
     let source = 'snapshot';
     if (!items.length) {
-      items = scanLocalConfigItems({ withContent: false });
+      items = await scanLocalBundles();
       source = 'filesystem';
     } else {
-      items = items.map(({ contentB64, ...rest }) => rest); // 列表不带大内容
+      items = items.map(({ contentB64, ...rest }) => rest); // 列表不带 zip 大内容
     }
     ok(res, { source, items });
   })
 );
 
+// 取单个档位包(zip)。key=slug。?snapshot=<id> 取历史版本。
 app.get(
   '/api/config/item/:key',
   h(async (req, res) => {
     const { key } = req.params;
-    if (!isAllowedKey(key)) return fail(res, 'BAD_KEY', `非法 key: ${key}`);
+    if (!isAllowedKey(key)) return fail(res, 'BAD_KEY', `非法档位: ${key}`);
+    // ?fs=1 强制实时打包本机该档位（用于"导入本机"，忽略 head 快照）
+    if (req.query.fs === '1') return ok(res, await buildLocalBundle(key));
     const snapshot = req.query.snapshot;
     if (snapshot) {
       const item = await versions.getSnapshotItem(snapshot, key);
       if (!item) return fail(res, 'NOT_FOUND', `快照 ${snapshot} 无 ${key}`, 404);
       return ok(res, item);
     }
-    // 当前：先 head 快照，再退回文件系统
     const cur = await versions.getCurrentItems();
     const found = cur.find((i) => i.key === key);
     if (found) return ok(res, found);
-    const fsItems = scanLocalConfigItems({ withContent: true });
-    const f = fsItems.find((i) => i.key === key);
-    if (!f) return fail(res, 'NOT_FOUND', `无 ${key}`, 404);
-    ok(res, f);
+    // 退回：实时打包本机该档位
+    ok(res, await buildLocalBundle(key));
   })
 );
 
-// 客户端推送本地项 -> 生成新快照
+// 客户端推送档位包 -> 生成新快照
 app.post(
   '/api/config/push',
   h(async (req, res) => {
     const { items, note } = req.body || {};
     if (!Array.isArray(items) || !items.length) return fail(res, 'BAD_PARAM', '缺少 items');
     for (const it of items) {
-      if (!isAllowedKey(it.key)) return fail(res, 'BAD_KEY', `非法 key: ${it.key}`);
+      if (!isAllowedKey(it.key)) return fail(res, 'BAD_KEY', `非法档位: ${it.key}`);
       if (typeof it.contentB64 !== 'string') return fail(res, 'BAD_PARAM', `缺少 contentB64: ${it.key}`);
     }
     const snapshotId = await versions.createSnapshot(items, { note: note || 'push' });
@@ -112,13 +116,13 @@ app.post(
   })
 );
 
-// diff：客户端可传本地清单，服务端返回与远端当前的差异。
+// diff：客户端传本地档位清单，返回与远端当前的差异。
 app.post(
   '/api/config/diff',
   h(async (req, res) => {
     const local = (req.body && req.body.localItems) || [];
     let remote = await versions.getCurrentItems();
-    if (!remote.length) remote = scanLocalConfigItems({ withContent: false });
+    if (!remote.length) remote = await scanLocalBundles();
     ok(res, { diff: diffItems(local, remote) });
   })
 );

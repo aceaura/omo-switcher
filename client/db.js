@@ -72,8 +72,12 @@ function upsertConfigItem(it, source = 'pulled') {
       content_b64=excluded.content_b64, sha256=excluded.sha256, size=excluded.size,
       source=excluded.source, updated_at=excluded.updated_at
   `).run({
-    key: it.key, provider: it.provider || null, tierSlug: it.tierSlug || null,
-    tierIndex: it.tierIndex ?? null, contentB64: it.contentB64, sha256: it.sha256,
+    key: it.key,
+    // 现在 key 即档位 slug，内容为整个档位 zip；provider 固定 'bundle'。
+    provider: it.provider || 'bundle',
+    tierSlug: it.slug || it.tierSlug || it.key,
+    tierIndex: it.index ?? it.tierIndex ?? null,
+    contentB64: it.contentB64, sha256: it.sha256,
     size: it.size ?? null, source, updated_at: new Date().toISOString(),
   });
 }

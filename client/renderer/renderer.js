@@ -124,22 +124,41 @@ function tagFor(key) {
   return '';
 }
 
+// 档位元数据（label / 包含文件），用于把 slug 显示成可读名 + 悬浮看文件清单。
+function tierMeta(slug) {
+  const r = remoteItems.find((i) => i.key === slug);
+  const l = localItems.find((i) => i.key === slug);
+  const src = r || l || {};
+  return {
+    label: src.label || slug,        // 如 "3. 均衡 · Balanced"
+    files: src.files || [],          // zip 内文件名列表
+  };
+}
+
+// 只显示档位特征名（slug），并把完整 label 与所含文件放进 title 悬浮提示。
+function tierCell(slug) {
+  const { label, files } = tierMeta(slug);
+  const title = `${label}\n包含 ${files.length} 个文件:\n` + files.map((f) => '  · ' + f).join('\n');
+  const filesBadge = files.length ? `<span class="mono" style="opacity:.6"> (${files.length}个文件)</span>` : '';
+  return `<span title="${title.replace(/"/g, '&quot;')}"><b>${slug}</b>${filesBadge}</span> ${tagFor(slug)}`;
+}
+
 function renderSyncTables() {
   const lb = $('localTable').querySelector('tbody'); lb.innerHTML = '';
   for (const it of localItems) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td><input type="checkbox" data-key="${it.key}"></td>
-      <td>${it.key} ${tagFor(it.key)}</td><td class="mono">${shortSha(it.sha256)}</td>`;
+      <td>${tierCell(it.key)}</td><td class="mono">${shortSha(it.sha256)}</td>`;
     lb.appendChild(tr);
   }
   const rb = $('remoteTable').querySelector('tbody'); rb.innerHTML = '';
   for (const it of remoteItems) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${it.key} ${tagFor(it.key)}</td><td class="mono">${shortSha(it.sha256)}</td>`;
+    tr.innerHTML = `<td>${tierCell(it.key)}</td><td class="mono">${shortSha(it.sha256)}</td>`;
     rb.appendChild(tr);
   }
   $('diffLegend').innerHTML =
-    `差异：仅本地 ${diff.onlyLocal.length} · 仅远端 ${diff.onlyRemote.length} · 有差异 ${diff.changed.length} · 相同 ${diff.same.length}`;
+    `档位包(zip)差异：仅本地 ${diff.onlyLocal.length} · 仅远端 ${diff.onlyRemote.length} · 有差异 ${diff.changed.length} · 相同 ${diff.same.length}`;
 }
 
 function selectedKeys() {

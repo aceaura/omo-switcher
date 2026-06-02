@@ -7,6 +7,36 @@
 
 ---
 
+## 0. 重要变更：同步单位 = 档位包 (bundle/zip)  ⭐ 2026-06-02
+
+同步/版本的单位从「8 个散文件」改为「**4 个档位包 (zip)**」，key = 档位 slug（`token-saving` /
+`predictable-cost` / `balanced` / `quality-first`）。本节**取代** §3.1 / §4.2 中以单文件为单位的描述。
+
+**每个档位包 `<slug>.zip` 内容**（由 `server/src/bundle.js` 确定性打包）：
+
+| 文件 | 打包 | 说明 |
+| --- | --- | --- |
+| `oh-my-openagent.<n>-<slug>.json` | ✅ | omo 该档位 |
+| `oh-my-opencode-slim.<n>-<slug>.json` | ✅ | slim 该档位 |
+| `opencode.jsonc` | ✅ | 主配置；**含明文 apiKey/baseURL**（见下方安全） |
+| `tui.json` | ✅ | 决定 TUI 激活哪个 plugin（48B） |
+| `package.json` / `package-lock.json` | ✅ | 锁定插件版本，换机可复现 |
+| `skills/`、`*.bak`、`.DS_Store`、`verify-variants.sh`、`node_modules/`、`log/storage/auth.json` | ❌ | 与档位无关/垃圾/凭据/产物 |
+
+- 共享文件清单可用 `BUNDLE_SHARED_FILES`(逗号分隔) 覆盖；`BUNDLE_REDACT_SECRETS=1` 把 apiKey 抹成 `***`。
+- **确定性打包**：所有 entry 用固定 mtime(2000-01-01) + DEFLATE level 6 → 内容不变则 zip 字节不变 → sha256 稳定 → diff 准确。
+- **安全**：默认保留真实密钥（用户要求）。zip 仅进本机 Redis/SQLite，私有仓库不含数据库文件。
+- **switch 不变**：`applyTier` 仍是把单个档位文件复制到 base 文件；打包只服务于"同步/版本"。
+- **UI**：同步/历史列表只显示 slug（如 `balanced`），完整 label 与所含文件放进悬浮 title。
+- **API 调整**：
+  - `GET /api/config/items[?fs=1]`：列档位包元数据(key=slug，不含 zip)。`fs=1` 强制扫本机文件系统(用于"导入本机")，否则取远端 head 快照。
+  - `GET /api/config/item/:slug[?snapshot=<id>|?fs=1]`：取该档位 zip(contentB64)。
+  - `POST /api/config/push`：items=[{key:slug, contentB64, sha256}] → 生成快照。
+  - 版本/回滚（`versions.js`）内容无关，key 换成 slug、内容换成 zip 即可，逻辑不变。
+- 新增模块：`server/src/bundle.js`（`buildTierBundle` / `listTierBundles` / `tierMemberFiles` / `isAllowedSlug`）。依赖 `jszip`。
+
+---
+
 ## 1. 仓库结构
 
 ```

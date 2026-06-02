@@ -34,6 +34,19 @@ export const config = {
     fallbackToMemory: process.env.REDIS_FALLBACK !== '0',
   },
 
+  // 档位打包：每个档位(slug)打成一个自包含 zip。
+  bundle: {
+    // 除两个 provider 的档位文件外，额外打包进每个 zip 的"共享文件"。
+    // 仅打包实际存在的；缺失的自动跳过。
+    sharedFiles: (process.env.BUNDLE_SHARED_FILES ||
+      'opencode.jsonc,tui.json,package.json,package-lock.json')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    // 是否对打包内容做密钥脱敏（把 apiKey 等抹成 ***）。默认关闭（保留真实密钥）。
+    redactSecrets: process.env.BUNDLE_REDACT_SECRETS === '1',
+  },
+
   restart: {
     // 用于匹配待杀进程的关键字（在进程命令行中查找）。
     killNeedle: process.env.RESTART_KILL_NEEDLE || 'opencode',

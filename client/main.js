@@ -68,11 +68,12 @@ function registerIpc() {
 
   // 从本机文件系统导入到 SQLite（首次填充本地配置项；走服务端扫描接口）
   ipcMain.handle('local:importFromServer', async () => {
-    const list = await apiCall('GET', '/api/config/items');
+    // 始终读"本机文件系统现状"(?fs=1)，把 4 个档位包灌入本地 SQLite。
+    const list = await apiCall('GET', '/api/config/items?fs=1');
     const imported = [];
     if (list.items) {
       for (const meta of list.items) {
-        const full = await apiCall('GET', `/api/config/item/${encodeURIComponent(meta.key)}`);
+        const full = await apiCall('GET', `/api/config/item/${encodeURIComponent(meta.key)}?fs=1`);
         if (full.contentB64) { db.upsertConfigItem({ ...meta, ...full }, 'local-scan'); imported.push(meta.key); }
       }
     }
