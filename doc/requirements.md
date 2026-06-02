@@ -62,7 +62,7 @@
 - 档位文件**带 UTF-8 BOM**，且为 PowerShell `ConvertTo-Json` 风格缩进 → **切换必须按字节整文件复制**（`fs.copyFile`），不要做 JSON 解析再序列化，以免破坏格式/BOM。
 - 切换的本质：`copy(<prefix>.<index>-<slug>.json) -> <prefix>.json`。
 - “当前档位”检测方式：把 base 文件字节与每个档位文件字节逐一比对（`Buffer.equals`），相等者即当前档位；都不等则为 `null`（说明被手动改过）。实测初始状态两个 base 文件均与任何档位文件**不一致**（旧格式），属正常。
-- **Redis 未安装**、**Electron 未安装**：开发环境需自行 `npm install`；服务端在 Redis 不可用时应能退回内存存储（见非功能需求）。
+- **Redis 未安装**：开发环境需自行 `npm install`；服务端在 Redis 不可用时应能退回内存存储（见非功能需求）。
 - 进程：实测当前无 opencode 在跑。重启逻辑需对“无进程”场景健壮。
 
 ---
@@ -72,16 +72,16 @@
 - **服务端**：Node.js + **Redis**，前置 **nginx**（nginx 由用户自行负责，本项目不实现）。
   - 服务端负责：扫描/读取配置、执行档位切换、重启 opencode、**版本化存储所有配置快照**、提供同步 API。
   - 注意：服务端与 opencode 运行在**同一台机器**上（因为要操作 `~/.config/opencode` 与重启本机 opencode）。
-- **客户端**：**Electron 桌面应用**。
-  - 本地配置走 **SQLite**（`better-sqlite3` 或 Node 内置 `node:sqlite`，见 design）。
+- **客户端**：**Flutter macOS 桌面应用**。
+  - 本地配置走客户端文件缓存，隔离本机私有设置与可同步配置项。
   - 提供 UI：性能档位下拉框、重启按钮、同步面板（含可编辑的服务器同步地址）、远端历史版本浏览/回滚。
 - **代码托管**：项目需推送到 `github.com`（仓库归属 `aceaura`）。
 
 ```
 ┌────────────────────────┐        HTTP/JSON        ┌───────────────────────────┐
-│   Electron 客户端      │  ───────────────────▶   │   nginx  →  Node 服务端    │
+│   Flutter 客户端       │  ───────────────────▶   │   nginx  →  Node 服务端    │
 │  - 下拉框/重启/同步UI   │  ◀───────────────────   │  - Express API            │
-│  - 本地 SQLite          │                          │  - Redis (状态+版本快照)   │
+│  - 本地缓存/私有设置    │                          │  - Redis (状态+版本快照)   │
 └────────────────────────┘                          │  - fs 操作 ~/.config/opencode│
                                                      │  - 重启 opencode(本机)     │
                                                      └───────────────────────────┘
@@ -100,7 +100,7 @@
 - FR-1.3 用户选择并触发切换后，服务端对每个 provider 执行 `copy(tierFile -> baseFile)`。
 - FR-1.4 切换必须**原子且可回滚**：先备份原 base 文件，复制失败时回滚已改动的文件，保证不出现“omo 改了 slim 没改”的半成品状态。
 - FR-1.5 界面需展示**当前生效档位**（来自服务端字节比对），并在 omo 与 slim 不一致时给出警告（显示各自档位）。
-- FR-1.6 切换成功/失败都要有明确反馈，并写入**切换历史**（服务端 Redis + 客户端 SQLite 各存一份）。
+- FR-1.6 切换成功/失败都要有明确反馈，并写入**切换历史**（服务端 Redis 为权威）。
 
 ### FR-2 重启 opencode（核心）
 - FR-2.1 界面提供“重启 opencode”按钮。
@@ -121,7 +121,7 @@
 - FR-3.4 **所有同步都需先勾选（checkbox）再点确认**，不得静默/自动覆盖。确认前应展示将要发生的变更摘要（新增/覆盖/删除、涉及哪些文件）。
 - FR-3.5 **“当前配置 (current config) 隔离、不被覆盖**：用户的“当前生效档位选择”及本机私有设置（如服务器地址）**默认不在同步集合内**，任何同步都不会改动它。
   - （此即早期需求“从服务端拉取配置全盘覆盖本地 SQLite 配置，但当前配置不覆盖”的精确化：可同步集合 = 配置项文件；不可同步集合 = 当前选择 + 本机私有设置。）
-- FR-3.6 **服务器同步地址可在界面编辑**并持久化到本地 SQLite（属于本机私有设置，不被同步覆盖）。需校验 URL 合法性，提供“测试连接”。
+- FR-3.6 **服务器同步地址可在界面编辑**并持久化到本机私有设置（不被同步覆盖）。需校验 URL 合法性，提供“测试连接”。
 
 ### FR-4 远端版本历史
 - FR-4.1 服务端**按时间戳保留所有历史版本**（快照不可变，永不自动删除，除非显式策略）。
@@ -179,7 +179,7 @@
 
 - Q1 同步的“配置项”集合是否仅包含 8 个 tier 文件？**[假设]** 是：仅 `oh-my-openagent.*-*.json` 与 `oh-my-opencode-slim.*-*.json` 这 8 个档位文件。base 文件不同步（属当前配置）。
 - Q2 远端快照粒度：全局快照 vs 每文件独立版本链？**[假设]** **全局快照**（每次 push 一个时间戳快照，含完整集合），单文件回滚=从某快照取该文件生成新快照。这同时满足 FR-4.4 与 FR-4.5。
-- Q3 客户端 SQLite 用 `better-sqlite3`（需对 Electron 做 native rebuild）还是 Node 内置 `node:sqlite`？**[假设]** 见 design 决策（优先 `better-sqlite3` + `@electron/rebuild`）。
+- Q3 客户端本地缓存采用 Flutter 文件存储；如后续需要结构化查询，可再引入 SQLite 插件。
 - Q4 是否需要鉴权（token）？**[假设]** 暂不做，预留 `Authorization` 头透传位。
 - Q5 “双向同步”冲突如何处理（本地与远端都改过）？**[假设]** 不做自动三路合并；同步是“覆盖式”，由用户勾选方向与文件，确认页展示差异，用户自担覆盖。
 - Q6 删除语义：远端有、本地无的项，pull 时是否在本地创建？push 时本地无的项是否删远端？**[假设]** 同步=并集对齐到所选方向源；不做删除（删除需显式操作，暂不实现）。
@@ -195,10 +195,10 @@
 - [x] 服务端 `versions.js`（Redis 快照版本库、整体/单文件回滚）— curl 验证 head 移动与回滚还原
 - [x] 服务端 `sync.js`（配置项扫描 + diff + key 白名单）
 - [x] 服务端 `index.js`（全部 Express 路由）— health/state/switch/snapshots 已实测
-- [x] 客户端 Electron：`main.js` / `preload.js` / `db.js` / `renderer/*`（全部 `node --check` 通过）
-- [ ] 客户端依赖安装与 GUI 实跑（需本机 `npm --prefix client install` + electron-rebuild；headless 环境未实跑）
+- [x] 客户端 Flutter：`client/lib/main.dart` + `client/test/widget_test.dart`（`flutter test` 通过）
+- [ ] 客户端 GUI 实跑（需本机 `flutter run -d macos`）
 - [ ] GitHub 推送（仓库归属 aceaura，已确认不含凭据）
-- [ ] 端到端联调（Electron ↔ server）与 §7 验收
+- [ ] 端到端联调（Flutter ↔ server）与 §7 验收
 
 > 服务端 FR-1/FR-2/FR-3/FR-4 已全部实现并用 curl 冒烟通过（含内存退回）。
-> 剩余主要是在有 GUI 的本机安装 Electron 依赖并实跑客户端、再推 GitHub。
+> 剩余主要是在有 GUI 的本机实跑 Flutter 客户端、再推 GitHub。

@@ -15,26 +15,20 @@
 
 ## 架构
 - **服务端**：Node.js + Express + Redis（前置 nginx，由你自行配置）。负责扫描/切换/重启/快照版本库/同步 API。须与 opencode 同机。
-- **客户端**：Electron 桌面应用，本地 SQLite 存配置项与私有设置。
+- **客户端**：Flutter macOS 桌面应用，本地文件存配置项与私有设置。
 
 ## 快速开始
 ```bash
-npm run install:all          # 安装 server 与 client 依赖
+npm run install:all          # 安装 server 依赖
+flutter pub get client       # 安装 Flutter client 依赖
 
 # 服务端（无 Redis 也能跑：自动退回内存存储并告警）
 npm run server               # 默认 http://127.0.0.1:7600
 
-# 客户端（Electron）
+# 客户端（Flutter macOS）
 npm run client
 ```
 可选启用持久化版本库：`brew install redis && brew services start redis`。
-
-> **客户端原生模块**：`better-sqlite3` 需匹配 Electron 的 ABI。安装时 `client` 的 postinstall
-> 会调用 `scripts/rebuild-sqlite.cjs`，用 `prebuild-install` 拉取对应 Electron 版本的预编译二进制
-> （绕过 Node v25 下 `@electron/rebuild` 自带 yargs CLI 崩溃的问题）。若失败，手动执行：
-> ```bash
-> cd node_modules/better-sqlite3 && ../.bin/prebuild-install -r electron -t <electron版本>
-> ```
 
 ### Docker（服务端 + Redis）
 ```bash

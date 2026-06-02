@@ -41,7 +41,7 @@
 
 ```
 omo-switcher/
-├── package.json                 # 根：workspaces(server, client) + 便捷脚本
+├── package.json                 # 根：server workspace + 便捷脚本
 ├── .gitignore
 ├── README.md                    # 安装/启动/同步说明（TODO）
 ├── doc/
@@ -58,15 +58,11 @@ omo-switcher/
 │       ├── versions.js          # ⛔TODO Redis 快照版本库 + 回滚（FR-4）
 │       ├── sync.js              # ⛔TODO 配置项 diff + 同步原语（FR-3）
 │       └── index.js             # ⛔TODO Express 路由汇总
-└── client/                      # Electron 桌面客户端
-    ├── package.json             # deps: electron, better-sqlite3, @electron/rebuild
-    ├── main.js                  # ⛔TODO 主进程：窗口 + IPC + SQLite + HTTP 调用
-    ├── preload.js               # ⛔TODO 暴露安全 API 给渲染层
-    ├── db.js                    # ⛔TODO SQLite schema + DAO
-    └── renderer/
-        ├── index.html           # ⛔TODO 下拉框/重启/同步/历史 UI
-        ├── styles.css
-        └── renderer.js
+└── client/                      # Flutter macOS 桌面客户端
+    ├── pubspec.yaml             # Flutter manifest
+    ├── lib/main.dart            # UI + HTTP API + 本地存储
+    ├── test/widget_test.dart    # Flutter widget tests
+    └── macos/                   # macOS runner
 ```
 
 ✅=已实现，⛔=待实现。
@@ -81,17 +77,15 @@ omo-switcher/
 | 服务端模块制式 | **ESM** (`"type":"module"`) | Node 25 原生支持；与 `presets.js` 等一致。 |
 | 服务端状态/版本库 | **Redis**（`ioredis`） | 用户指定。当前档位、切换历史、配置快照版本均存 Redis。 |
 | Redis 不可用 | **内存退回** | 见 store.js；保证无 Redis 也能跑（带告警）。NFR-1。 |
-| 客户端 | **Electron** | 用户指定，桌面体验、可放系统托盘。 |
-| 客户端本地存储 | **SQLite** | 用户指定（“配置走 sqlite”）。 |
+| 客户端 | **Flutter macOS** | 使用 Flutter 重构当前客户端，保留桌面体验。 |
+| 客户端本地存储 | **本地 JSON 文件** | 保存 server_url/theme 与配置项缓存，避免原生模块重建。 |
 | 文件切换 | **`fs.copyFile` 整文件字节复制** | 保留 BOM / 原始格式，绝不 JSON 重序列化。见 requirements §2。 |
 | 重启 | **`pkill`-式精确杀 + `osascript` 新终端** | macOS 一键重启。FR-2。 |
 
-### 2.1 客户端 SQLite 选型决策
-- **首选 `better-sqlite3`**（同步 API、稳定、生态成熟）。Electron 下需对原生模块重建：
-  - 加 `@electron/rebuild` 到 devDeps，`postinstall: electron-rebuild -f -w better-sqlite3`。
-- **备选 `node:sqlite`**（Node 22.5+ 内置，免编译）。若 Electron 内置 Node 版本支持且想免去 native rebuild，可切换。
-  - 风险：不同 Electron 版本对 `node:sqlite` 暴露不一致；需 `--experimental-sqlite`。
-- **决策**：默认 `better-sqlite3`；`db.js` 用一层薄 DAO 封装，便于将来替换。
+### 2.1 客户端本地存储决策
+- Flutter 客户端使用 `~/Library/Application Support/omo-switcher-client/` 下的 JSON 文件保存本机私有设置与配置项缓存。
+- 配置项仍保存 `contentB64`、`sha256`、`size` 等字段，保持服务端协议不变。
+- 该实现不引入原生数据库模块，降低安装与 ABI rebuild 风险。
 
 ---
 
@@ -132,54 +126,19 @@ omo-switcher/
 - snapshotId 建议：`<ts>-<shorthash>`（时间戳可读 + 内容指纹防碰撞）。
 - **不可变**：已写入的 `snapshot:*` 永不修改；回滚 = 生成新快照（内容复制自旧快照/旧文件），更新 `remote:head`，`parentId` 记录来源，保留可追溯链。
 
-### 3.3 客户端 SQLite schema
+### 3.3 客户端本地缓存
 > “本地配置”与“当前配置/私有设置”分表隔离（FR-3.5）。
 
-```sql
--- 本机私有设置：永不被同步覆盖（含服务器地址、当前档位缓存、UI 偏好）
-CREATE TABLE IF NOT EXISTS local_settings (
-  key   TEXT PRIMARY KEY,
-  value TEXT
-);
--- 约定键：'server_url'(同步地址), 'current_tier'(当前档位缓存),
---          'theme', 'last_sync_at', 'auth_token'(可选)
+```jsonc
+// settings.json，本机私有设置：永不被同步覆盖
+{ "server_url": "http://127.0.0.1:7600", "theme": "system" }
 
--- 本地配置项缓存（参与同步；pull 会按所选项覆盖这里）
-CREATE TABLE IF NOT EXISTS config_items (
-  key        TEXT PRIMARY KEY,   -- 文件名
-  provider   TEXT NOT NULL,
-  tier_slug  TEXT,
-  tier_index INTEGER,
-  content_b64 TEXT NOT NULL,
-  sha256     TEXT NOT NULL,
-  size       INTEGER,
-  source     TEXT,               -- 'local-scan' | 'pulled' | 'edited'
-  updated_at TEXT NOT NULL
-);
-
--- 本地切换历史（与服务端 history 各存一份，FR-1.6）
-CREATE TABLE IF NOT EXISTS switch_history (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  tier_slug  TEXT,
-  ok         INTEGER,
-  detail     TEXT,
-  at         TEXT NOT NULL
-);
-
--- 同步操作日志（FR-3.4 留痕）
-CREATE TABLE IF NOT EXISTS sync_log (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  direction  TEXT,               -- 'pull' | 'push'
-  scope      TEXT,               -- 'all' | 'single'
-  items      TEXT,               -- JSON 数组：涉及的 key
-  snapshot_id TEXT,              -- 关联远端快照（pull 自/push 生成）
-  ok         INTEGER,
-  at         TEXT NOT NULL
-);
+// config_items.json，本地配置项缓存（参与同步；pull 会按所选项覆盖这里）
+{ "items": [{ "key": "balanced", "contentB64": "...", "sha256": "...", "source": "pulled" }] }
 ```
 
-**隔离要点**：`pull` 全盘覆盖时，只清空/覆盖 `config_items`（且仅所选 key），
-**绝不触碰** `local_settings`（server_url / current_tier 等）。这正是“当前配置不被覆盖”。
+**隔离要点**：`pull` 全盘覆盖时，只清空/覆盖配置项缓存（且仅所选 key），
+**绝不触碰** `settings.json`（server_url / theme 等）。这正是“当前配置不被覆盖”。
 
 ---
 
@@ -297,15 +256,12 @@ export function diffItems(localItems, remoteItems): {
 
 ---
 
-## 6. Electron 客户端设计
+## 6. Flutter 客户端设计
 
-### 6.1 进程模型
-- **main.js**：创建 BrowserWindow；初始化 SQLite（`db.js`）；通过 IPC 暴露：
-  - `settings:get/set`（读写 `local_settings`，含 server_url）
-  - `http:call`（main 进程用 `fetch` 请求服务端，避免渲染层 CORS / 暴露 token）
-  - `db:*`（读写 config_items / 历史 / 同步日志）
-- **preload.js**：`contextBridge.exposeInMainWorld('api', {...})` 只暴露白名单方法。
-- **renderer**：纯 HTML/CSS/JS（或可选小框架）。**不直接** require node 模块。
+### 6.1 应用模型
+- `lib/main.dart`：Flutter 入口、Material 3 UI、HTTP API 封装、本地文件存储封装。
+- `HttpOmoApi`：直接调用服务端 REST API，保持原有 `{ok,error,log}` 协议。
+- `FileLocalStore`：读写本机私有设置与配置项缓存，不参与远端同步覆盖。
 
 ### 6.2 UI 布局（单窗口，分区）
 1. **顶部状态条**：服务端连通状态、storeMode、当前生效档位（omo/slim 一致性提示）。
@@ -323,7 +279,7 @@ export function diffItems(localItems, remoteItems): {
    - “整体回滚”按钮（`/rollback`）；行内“单文件回滚”（`/rollback-file`）。
 
 ### 6.3 关键交互流程
-- **pull（远端→本地）**：选版本→拉清单→与本地 diff→勾选→确认→逐项 `GET item`→写 `config_items`（仅所选 key）→`local_settings` 不动。
+- **pull（远端→本地）**：选版本→拉清单→与本地 diff→勾选→确认→逐项 `GET item`→写配置项缓存（仅所选 key）→私有设置不动。
 - **push（本地→远端）**：勾选→确认→`POST /config/push`（含所选项内容）→服务端 `createSnapshot`→刷新历史。
 - **测试连接**：`GET {server_url}/api/health`，展示 storeMode。
 
@@ -341,7 +297,7 @@ export function diffItems(localItems, remoteItems): {
 1. **里程碑 A（核心闭环，可演示）**：`switcher.js` + `restart.js` + 最小 `index.js`（health/state/switch/restart/history）。手动用 curl 验收 FR-1/FR-2。
 2. **里程碑 B（版本库）**：`versions.js` + 快照/回滚路由。用 curl 验收 FR-4。
 3. **里程碑 C（同步原语）**：`config/items`、`config/item`、`config/push`、`sync.diffItems`。
-4. **里程碑 D（客户端）**：Electron 骨架 → 设置区(server_url) + 状态/切换/重启 → 同步区 → 历史区。
+4. **里程碑 D（客户端）**：Flutter 骨架 → 设置区(server_url) + 状态/切换/重启 → 同步区 → 历史区。
 5. **里程碑 E**：README + 推送 GitHub（不含凭据）+ 联调验收（requirements §7）。
 
 > 已实现的 `config.js/store.js/presets.js` 已为里程碑 A 准备好 `getState()`/`resolveSwitch()`/`store.*`，
@@ -352,13 +308,14 @@ export function diffItems(localItems, remoteItems): {
 ## 9. 本地启动（开发）
 ```bash
 # 安装
-cd omo-switcher && npm run install:all       # 等价于分别 npm --prefix server/client install
+cd omo-switcher && npm run install:all       # 安装 server 依赖
+flutter pub get client                       # 安装 Flutter client 依赖
 
 # 服务端（无 Redis 也能跑，会退回内存并告警）
 npm run server                                # 默认 127.0.0.1:7600
 #   可选 env：OPENCODE_DIR / REDIS_URL / OMO_SWITCHER_PORT / RESTART_* 等
 
-# 客户端（Electron）
+# 客户端（Flutter macOS）
 npm run client
 ```
 > 装 Redis（可选，启用版本/历史持久化）：`brew install redis && brew services start redis`。
