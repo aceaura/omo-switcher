@@ -105,8 +105,34 @@ test('applyTier unzips a workspace package into active config files', async () =
   const result = await applyTier('balanced');
 
   assert.equal(result.ok, true);
-  assert.equal(fs.readFileSync(path.join(dir, 'oh-my-openagent.json'), 'utf8'), '{"applied":"omo"}');
+  // 切换写盘时自动修复：oh-my-openagent.json 注入 disabled_skills，package.json 注入 slim 依赖。
+  const omo = JSON.parse(fs.readFileSync(path.join(dir, 'oh-my-openagent.json'), 'utf8'));
+  assert.equal(omo.applied, 'omo');
+  assert.deepEqual(omo.disabled_skills, ['security-research', 'security-review']);
+  const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+  assert.equal(pkg.dependencies['oh-my-opencode-slim'], '^1.1.1');
+  // slim 配置不受影响，原样写入。
   assert.equal(fs.readFileSync(path.join(dir, 'oh-my-opencode-slim.json'), 'utf8'), '{"applied":"slim"}');
+});
+
+test('auto-fix is idempotent: already-fixed members keep their bytes', async () => {
+  const dir = tempDir();
+  await setOpencodeDir(dir);
+  const omoFixed = '{"$schema":"x","disabled_skills":["security-research","security-review"],"applied":"omo"}';
+  await makeBundle(dir, 'balanced', {
+    'oh-my-openagent.json': omoFixed,
+    'oh-my-opencode-slim.json': '{"applied":"slim"}',
+    'package.json': '{"dependencies":{"oh-my-opencode-slim":"^9.9.9"}}',
+  });
+
+  const { extractTierBundle } = await importFresh('../server/src/bundle.js');
+  const extracted = await extractTierBundle('balanced');
+  const omo = JSON.parse(extracted.entries.find((e) => e.name === 'oh-my-openagent.json').content.toString('utf8'));
+  const pkg = JSON.parse(extracted.entries.find((e) => e.name === 'package.json').content.toString('utf8'));
+
+  assert.deepEqual(omo.disabled_skills, ['security-research', 'security-review']);
+  // 已有的依赖版本不被覆盖。
+  assert.equal(pkg.dependencies['oh-my-opencode-slim'], '^9.9.9');
 });
 
 test('writeTierBundle normalizes old numbered entries into active zip entries', async () => {

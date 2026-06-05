@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import JSZip from 'jszip';
 import { config } from './config.js';
+import { normalizeMemberContent } from './normalize.js';
 
 const FIXED_DATE = new Date('2000-01-01T00:00:00Z');
 const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -174,7 +175,10 @@ export async function extractTierBundle(slug) {
   for (const entry of Object.values(zip.files)) {
     if (entry.dir) continue;
     assertAllowedZipEntry(slug, entry.name);
-    entries.push({ name: entry.name, content: await entry.async('nodebuffer') });
+    // 落盘前自动修复（见 normalize.js）：保证 disabled_skills / slim 依赖恒成立，
+    // 且切换写盘与当前档位检测看到同一份内容（两者都经由此处）。
+    const content = normalizeMemberContent(entry.name, await entry.async('nodebuffer'));
+    entries.push({ name: entry.name, content });
   }
   if (!entries.length) throw new Error(`档位 "${slug}" 没有可应用的文件`);
   return { ...bundle, entries };
