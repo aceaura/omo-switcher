@@ -28,7 +28,7 @@ for (const t of st.tiers) {
   }
 }
 fs.rmSync(tmp, { force: true });
-console.log(bad === 0 ? '✓ 8 档 × (omo+slim) 全部通过 validateTierFile（切换不会被拒）' : `✗ ${bad} 个文件未通过`);
+console.log(bad === 0 ? `✓ ${st.tiers.length} 档 × (omo+slim) 全部通过 validateTierFile（切换不会被拒）` : `✗ ${bad} 个文件未通过`);
 
 // 3) 生效文件 == opus-high.zip 内同名条目（字节级）
 const high = await extractTierBundle('opus-high');

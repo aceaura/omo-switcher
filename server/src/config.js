@@ -31,6 +31,11 @@ export const config = {
     'gpt-high': { index: 6, label: 'GptMode · High', color: '#d29922' },
     'gpt-medium': { index: 7, label: 'GptMode · Medium', color: '#58a6ff' },
     'gpt-low': { index: 8, label: 'GptMode · Low', color: '#3fb950' },
+    // 纯单模型档位（每个模型一档；纯文本模型的视觉角色会退化）
+    'pure-deepseek': { index: 9, label: 'Pure DeepSeek V4 Pro', color: '#a371f7' },
+    'pure-qwen': { index: 10, label: 'Pure Qwen3.7-max', color: '#e3b341' },
+    'pure-opus': { index: 11, label: 'Pure Opus 4.8', color: '#f85149' },
+    'pure-gpt': { index: 12, label: 'Pure GPT-5.5', color: '#3fb950' },
   },
 
   redis: {
