@@ -19,15 +19,21 @@ const _balancedFiles = {
   'package-lock.json': '{}',
 };
 
-void _writeZip(Directory dir, String slug, Map<String, String> files) {
+List<int> _zipBytes(Map<String, String> files) {
   final archive = Archive();
   files.forEach(
     (name, content) =>
         archive.add(ArchiveFile.bytes(name, utf8.encode(content))),
   );
+  return ZipEncoder().encodeBytes(archive);
+}
+
+String _zipB64(Map<String, String> files) => base64Encode(_zipBytes(files));
+
+void _writeZip(Directory dir, String slug, Map<String, String> files) {
   File(
     '${dir.path}${Platform.pathSeparator}$slug.zip',
-  ).writeAsBytesSync(ZipEncoder().encodeBytes(archive));
+  ).writeAsBytesSync(_zipBytes(files));
 }
 
 Directory _makeWorkspace(WidgetTester tester, {bool empty = false}) {
@@ -133,6 +139,50 @@ void main() {
     expect(find.text('balanced'), findsWidgets);
     expect(find.text('1/1 项'), findsOneWidget);
   });
+
+  testWidgets(
+    'applies a local repo row and imports it to workspace if missing',
+    (tester) async {
+      final dir = _makeWorkspace(tester, empty: true);
+      final api = FakeApi(empty: true);
+      final store = MemoryStore({'server_url': 'http://127.0.0.1:7600'});
+      store.items['local-only'] = ConfigItem(
+        key: 'local-only',
+        contentB64: _zipB64(_balancedFiles),
+        files: _balancedFiles.keys.toList(),
+      );
+
+      await tester.pumpWidget(
+        MyApp(
+          api: api,
+          workspace: LocalWorkspace(directory: dir),
+          store: store,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('本地仓库'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('local-only'));
+      await tester.pumpAndSettle();
+      expect(find.text('是否应用此配置'), findsOneWidget);
+
+      await tester.tap(find.text('确认执行'));
+      await tester.pumpAndSettle();
+
+      expect(
+        File('${dir.path}${Platform.pathSeparator}local-only.zip').existsSync(),
+        isTrue,
+      );
+      expect(
+        File(
+          '${dir.path}${Platform.pathSeparator}oh-my-openagent.json',
+        ).readAsStringSync(),
+        _balancedFiles['oh-my-openagent.json'],
+      );
+      expect(find.textContaining('已应用配置: local-only'), findsOneWidget);
+    },
+  );
 
   testWidgets('syncs workspace->local, local->cloud, cloud->local', (
     tester,

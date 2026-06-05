@@ -724,6 +724,84 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
     await _refreshState();
   }
 
+  Future<void> _applyWorkspaceItem(String key) async {
+    if (!await _confirmApplyConfig(key, '常用配置')) return;
+    await _applyWorkspaceKey(key);
+  }
+
+  Future<void> _applyLocalItem(String key) async {
+    if (!await _confirmApplyConfig(key, '本地仓库')) return;
+    if (!_workspaceHasKey(key)) {
+      final item = await widget.store.getItem(key);
+      if (item?.contentB64 == null) {
+        return _notice('本地仓库中没有可应用的配置内容: $key');
+      }
+      await widget.workspace.writeBundle(key, item!.contentB64!);
+    }
+    await _applyWorkspaceKey(key);
+  }
+
+  Future<void> _applyLocalHistoryItem(String key) async {
+    if (!await _confirmApplyConfig(key, '本地历史')) return;
+    if (!_workspaceHasKey(key)) {
+      final item = _itemByKey(localHistoryItems, key);
+      if (item?.contentB64 == null) {
+        return _notice('本地历史中没有可应用的配置内容: $key');
+      }
+      await widget.workspace.writeBundle(key, item!.contentB64!);
+    }
+    await _applyWorkspaceKey(key);
+  }
+
+  Future<void> _applyRemoteItem(String key) async {
+    if (!await _confirmApplyConfig(key, '云端仓库')) return;
+    if (!_workspaceHasKey(key)) {
+      final result = await widget.api.configItem(serverUrl, key);
+      final contentB64 = result['contentB64'] as String?;
+      if (contentB64 == null) return _notice('云端仓库中没有可应用的配置内容: $key');
+      await widget.workspace.writeBundle(key, contentB64);
+    }
+    await _applyWorkspaceKey(key);
+  }
+
+  Future<void> _applyRemoteHistoryItem(String key) async {
+    if (selectedRemoteHistory.isEmpty) return _notice('请选择一条云端历史');
+    if (!await _confirmApplyConfig(key, '云端历史')) return;
+    if (!_workspaceHasKey(key)) {
+      final result = await widget.api.configItem(
+        serverUrl,
+        key,
+        snapshot: selectedRemoteHistory,
+      );
+      final contentB64 = result['contentB64'] as String?;
+      if (contentB64 == null) return _notice('云端历史中没有可应用的配置内容: $key');
+      await widget.workspace.writeBundle(key, contentB64);
+    }
+    await _applyWorkspaceKey(key);
+  }
+
+  Future<bool> _confirmApplyConfig(String key, String source) async {
+    return _confirm('是否应用此配置', '将应用「$key」到当前配置。\n来源：$source');
+  }
+
+  Future<void> _applyWorkspaceKey(String key) async {
+    try {
+      final log = await widget.workspace.applyTier(key);
+      setState(() {
+        selectedTier = key;
+        switchLog = '已应用「$key」:\n${log.join('\n')}';
+      });
+      _notice('已应用配置: $key');
+      await _refreshAll();
+    } catch (error) {
+      setState(() => switchLog = '应用失败: $error');
+      _notice('应用失败: $error');
+    }
+  }
+
+  bool _workspaceHasKey(String key) =>
+      workspaceItems.any((item) => item.key == key);
+
   // 工作目录已本机化：opencode 在本机运行，重启需手动执行（GUI/进程无法可靠代劳）。
   Future<void> _restartDesktop() async {
     setState(
@@ -1276,6 +1354,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onSyncToRemote: _pushWorkspaceToRemote,
         onRename: _renameWorkspaceItem,
         onDelete: _deleteWorkspaceItems,
+        onApplyItem: (key) => unawaited(_applyWorkspaceItem(key)),
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
         searchController: searchController,
@@ -1297,6 +1376,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onPushRemote: _pushLocalToRemote,
         onRename: _renameLocalItem,
         onDelete: _deleteLocalItems,
+        onApplyItem: (key) => unawaited(_applyLocalItem(key)),
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
         searchController: searchController,
@@ -1319,6 +1399,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onSyncToLocal: _restoreLocalHistoryToLocal,
         onUploadWorkspace: _syncLocalHistoryToWorkspace,
         onPushRemote: _pushLocalHistoryToRemote,
+        onApplyItem: (key) => unawaited(_applyLocalHistoryItem(key)),
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
         searchController: searchController,
@@ -1343,6 +1424,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onSyncToLocal: _pullRemoteToLocal,
         onRename: _renameRemoteItem,
         onDelete: _deleteRemoteItems,
+        onApplyItem: (key) => unawaited(_applyRemoteItem(key)),
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
         searchController: searchController,
@@ -1365,6 +1447,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onSyncToRemote: _restoreRemoteHistoryToRemote,
         onSyncToWorkspace: _syncRemoteHistoryToWorkspace,
         onSyncToLocal: _syncRemoteHistoryToLocal,
+        onApplyItem: (key) => unawaited(_applyRemoteHistoryItem(key)),
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
         searchController: searchController,
@@ -1547,6 +1630,7 @@ class _WorkspaceSyncPage extends StatelessWidget {
     required this.onSyncToRemote,
     required this.onRename,
     required this.onDelete,
+    required this.onApplyItem,
     required this.onRefresh,
     required this.isRefreshing,
     required this.searchController,
@@ -1565,6 +1649,7 @@ class _WorkspaceSyncPage extends StatelessWidget {
   final VoidCallback onSyncToRemote;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+  final ValueChanged<String> onApplyItem;
   final VoidCallback onRefresh;
   final bool isRefreshing;
   final TextEditingController searchController;
@@ -1615,6 +1700,7 @@ class _WorkspaceSyncPage extends StatelessWidget {
           presence: presence,
           selected: selected,
           onSelectedChanged: onSelectedChanged,
+          onItemPressed: onApplyItem,
         ),
       ],
     );
@@ -1634,6 +1720,7 @@ class _LocalPage extends StatelessWidget {
     required this.onPushRemote,
     required this.onRename,
     required this.onDelete,
+    required this.onApplyItem,
     required this.onRefresh,
     required this.isRefreshing,
     required this.searchController,
@@ -1653,6 +1740,7 @@ class _LocalPage extends StatelessWidget {
   final VoidCallback onPushRemote;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+  final ValueChanged<String> onApplyItem;
   final VoidCallback onRefresh;
   final bool isRefreshing;
   final TextEditingController searchController;
@@ -1703,6 +1791,7 @@ class _LocalPage extends StatelessWidget {
           presence: presence,
           selected: selected,
           onSelectedChanged: onSelectedChanged,
+          onItemPressed: onApplyItem,
         ),
         _LogBox(text: log),
       ],
@@ -1724,6 +1813,7 @@ class _LocalHistoryPage extends StatelessWidget {
     required this.onSyncToLocal,
     required this.onUploadWorkspace,
     required this.onPushRemote,
+    required this.onApplyItem,
     required this.onRefresh,
     required this.isRefreshing,
     required this.searchController,
@@ -1744,6 +1834,7 @@ class _LocalHistoryPage extends StatelessWidget {
   final VoidCallback onSyncToLocal;
   final VoidCallback onUploadWorkspace;
   final VoidCallback onPushRemote;
+  final ValueChanged<String> onApplyItem;
   final VoidCallback onRefresh;
   final bool isRefreshing;
   final TextEditingController searchController;
@@ -1790,6 +1881,7 @@ class _LocalHistoryPage extends StatelessWidget {
           presence: presence,
           selected: selected,
           onSelectedChanged: onSelectedChanged,
+          onItemPressed: onApplyItem,
         ),
         _LogBox(text: log),
       ],
@@ -1813,6 +1905,7 @@ class _RemotePage extends StatelessWidget {
     required this.onSyncToLocal,
     required this.onRename,
     required this.onDelete,
+    required this.onApplyItem,
     required this.onRefresh,
     required this.isRefreshing,
     required this.searchController,
@@ -1835,6 +1928,7 @@ class _RemotePage extends StatelessWidget {
   final VoidCallback onSyncToLocal;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+  final ValueChanged<String> onApplyItem;
   final VoidCallback onRefresh;
   final bool isRefreshing;
   final TextEditingController searchController;
@@ -1915,6 +2009,7 @@ class _RemotePage extends StatelessWidget {
           presence: presence,
           selected: selected,
           onSelectedChanged: onSelectedChanged,
+          onItemPressed: onApplyItem,
         ),
         _LogBox(text: log),
       ],
@@ -1936,6 +2031,7 @@ class _RemoteHistoryPage extends StatelessWidget {
     required this.onSyncToRemote,
     required this.onSyncToWorkspace,
     required this.onSyncToLocal,
+    required this.onApplyItem,
     required this.onRefresh,
     required this.isRefreshing,
     required this.searchController,
@@ -1956,6 +2052,7 @@ class _RemoteHistoryPage extends StatelessWidget {
   final VoidCallback onSyncToRemote;
   final VoidCallback onSyncToWorkspace;
   final VoidCallback onSyncToLocal;
+  final ValueChanged<String> onApplyItem;
   final VoidCallback onRefresh;
   final bool isRefreshing;
   final TextEditingController searchController;
@@ -2002,6 +2099,7 @@ class _RemoteHistoryPage extends StatelessWidget {
           presence: presence,
           selected: selected,
           onSelectedChanged: onSelectedChanged,
+          onItemPressed: onApplyItem,
         ),
         _LogBox(text: log),
       ],
@@ -2149,12 +2247,14 @@ class _ConfigList extends StatelessWidget {
     required this.presence,
     required this.selected,
     required this.onSelectedChanged,
+    required this.onItemPressed,
   });
 
   final List<ConfigItem> items;
   final Presence presence;
   final Set<String> selected;
   final void Function(String key, bool checked) onSelectedChanged;
+  final ValueChanged<String> onItemPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -2184,25 +2284,40 @@ class _ConfigList extends StatelessWidget {
           ),
           const Divider(height: 1),
           for (final item in items)
-            CheckboxListTile(
-              value: selected.contains(item.key),
-              onChanged: (checked) =>
-                  onSelectedChanged(item.key, checked ?? false),
-              title: Wrap(
-                spacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
+            ListTile(
+              onTap: () => onItemPressed(item.key),
+              leading: Checkbox(
+                value: selected.contains(item.key),
+                onChanged: (checked) =>
+                    onSelectedChanged(item.key, checked ?? false),
+              ),
+              title: Row(
                 children: [
-                  Tooltip(
-                    message:
-                        '${item.label ?? item.key}\n包含 ${item.files.length} 个文件:\n${item.files.join('\n')}',
-                    child: Text(
-                      item.key,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
+                  Expanded(
+                    child: Wrap(
+                      spacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Tooltip(
+                          message:
+                              '${item.label ?? item.key}\n包含 ${item.files.length} 个文件:\n${item.files.join('\n')}',
+                          child: Text(
+                            item.key,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        if (item.files.isNotEmpty)
+                          Text('(${item.files.length}个文件)'),
+                        for (final tag in presence.tagsFor(item.key))
+                          _PresenceTag(label: tag),
+                      ],
                     ),
                   ),
-                  if (item.files.isNotEmpty) Text('(${item.files.length}个文件)'),
-                  for (final tag in presence.tagsFor(item.key))
-                    _PresenceTag(label: tag),
+                  Icon(
+                    Icons.play_circle_outline,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ],
               ),
               subtitle: Text(shortSha(item.sha256)),
@@ -2551,6 +2666,13 @@ bool _matchesConfigItem(ConfigItem item, String needle) {
   return values.whereType<String>().any(
     (value) => value.toLowerCase().contains(needle),
   );
+}
+
+ConfigItem? _itemByKey(List<ConfigItem> items, String key) {
+  for (final item in items) {
+    if (item.key == key) return item;
+  }
+  return null;
 }
 
 List<String> _currentFilesFor(String selectedTier, List<Tier> tiers) {
