@@ -539,6 +539,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   final selectedLocal = <String>{};
   final selectedRemote = <String>{};
   final serverUrlController = TextEditingController();
+  bool isRefreshing = false;
 
   @override
   void initState() {
@@ -573,6 +574,19 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
 
   Future<void> _refreshAll() async {
     await Future.wait([_refreshState(), _reloadSync(), _reloadHistory()]);
+  }
+
+  Future<void> _refreshFromUi() async {
+    if (isRefreshing) return;
+    setState(() => isRefreshing = true);
+    try {
+      await _refreshAll();
+      _notice('已刷新');
+    } catch (error) {
+      _notice('刷新失败: $error');
+    } finally {
+      if (mounted) setState(() => isRefreshing = false);
+    }
   }
 
   Future<void> _reloadHistory() async {
@@ -1199,6 +1213,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onApplyTier: _applyTier,
         onRestartDesktop: _restartDesktop,
         onRestartTui: _restartTui,
+        onRefresh: () => unawaited(_refreshFromUi()),
+        isRefreshing: isRefreshing,
       ),
       _WorkspaceSyncPage(
         path: workspacePath,
@@ -1214,6 +1230,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onSyncToRemote: _pushWorkspaceToRemote,
         onRename: _renameWorkspaceItem,
         onDelete: _deleteWorkspaceItems,
+        onRefresh: () => unawaited(_refreshFromUi()),
+        isRefreshing: isRefreshing,
       ),
       _LocalPage(
         path: localPath,
@@ -1228,6 +1246,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onPushRemote: _pushLocalToRemote,
         onRename: _renameLocalItem,
         onDelete: _deleteLocalItems,
+        onRefresh: () => unawaited(_refreshFromUi()),
+        isRefreshing: isRefreshing,
       ),
       _LocalHistoryPage(
         snapshots: localHistory,
@@ -1243,6 +1263,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onSyncToLocal: _restoreLocalHistoryToLocal,
         onUploadWorkspace: _syncLocalHistoryToWorkspace,
         onPushRemote: _pushLocalHistoryToRemote,
+        onRefresh: () => unawaited(_refreshFromUi()),
+        isRefreshing: isRefreshing,
       ),
       _RemotePage(
         serverUrl: serverUrl,
@@ -1260,6 +1282,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onSyncToLocal: _pullRemoteToLocal,
         onRename: _renameRemoteItem,
         onDelete: _deleteRemoteItems,
+        onRefresh: () => unawaited(_refreshFromUi()),
+        isRefreshing: isRefreshing,
       ),
       _RemoteHistoryPage(
         snapshots: remoteHistory,
@@ -1275,6 +1299,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onSyncToRemote: _restoreRemoteHistoryToRemote,
         onSyncToWorkspace: _syncRemoteHistoryToWorkspace,
         onSyncToLocal: _syncRemoteHistoryToLocal,
+        onRefresh: () => unawaited(_refreshFromUi()),
+        isRefreshing: isRefreshing,
       ),
     ];
 
@@ -1335,6 +1361,8 @@ class _ConfigPage extends StatelessWidget {
     required this.onApplyTier,
     required this.onRestartDesktop,
     required this.onRestartTui,
+    required this.onRefresh,
+    required this.isRefreshing,
   });
 
   final String path;
@@ -1348,12 +1376,16 @@ class _ConfigPage extends StatelessWidget {
   final VoidCallback onApplyTier;
   final VoidCallback onRestartDesktop;
   final VoidCallback onRestartTui;
+  final VoidCallback onRefresh;
+  final bool isRefreshing;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '当前配置',
       count: '${tiers.length} 档',
+      onRefresh: onRefresh,
+      isRefreshing: isRefreshing,
       children: [
         Text(path),
         const SizedBox(height: 8),
@@ -1425,6 +1457,8 @@ class _WorkspaceSyncPage extends StatelessWidget {
     required this.onSyncToRemote,
     required this.onRename,
     required this.onDelete,
+    required this.onRefresh,
+    required this.isRefreshing,
   });
 
   final String path;
@@ -1436,12 +1470,16 @@ class _WorkspaceSyncPage extends StatelessWidget {
   final VoidCallback onSyncToRemote;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+  final VoidCallback onRefresh;
+  final bool isRefreshing;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '常用配置',
       count: '${items.length} 项',
+      onRefresh: onRefresh,
+      isRefreshing: isRefreshing,
       children: [
         Text(path),
         const SizedBox(height: 8),
@@ -1492,6 +1530,8 @@ class _LocalPage extends StatelessWidget {
     required this.onPushRemote,
     required this.onRename,
     required this.onDelete,
+    required this.onRefresh,
+    required this.isRefreshing,
   });
 
   final String path;
@@ -1504,12 +1544,16 @@ class _LocalPage extends StatelessWidget {
   final VoidCallback onPushRemote;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+  final VoidCallback onRefresh;
+  final bool isRefreshing;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '本地仓库',
       count: '${items.length} 项',
+      onRefresh: onRefresh,
+      isRefreshing: isRefreshing,
       children: [
         if (path.isNotEmpty) Text(path),
         const SizedBox(height: 8),
@@ -1562,6 +1606,8 @@ class _LocalHistoryPage extends StatelessWidget {
     required this.onSyncToLocal,
     required this.onUploadWorkspace,
     required this.onPushRemote,
+    required this.onRefresh,
+    required this.isRefreshing,
   });
 
   final List<HistoryEntry> snapshots;
@@ -1575,12 +1621,16 @@ class _LocalHistoryPage extends StatelessWidget {
   final VoidCallback onSyncToLocal;
   final VoidCallback onUploadWorkspace;
   final VoidCallback onPushRemote;
+  final VoidCallback onRefresh;
+  final bool isRefreshing;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '本地历史',
       count: '${snapshots.length} 版',
+      onRefresh: onRefresh,
+      isRefreshing: isRefreshing,
       children: [
         _HistoryToolbar(
           snapshots: snapshots,
@@ -1630,6 +1680,8 @@ class _RemotePage extends StatelessWidget {
     required this.onSyncToLocal,
     required this.onRename,
     required this.onDelete,
+    required this.onRefresh,
+    required this.isRefreshing,
   });
 
   final String serverUrl;
@@ -1645,12 +1697,16 @@ class _RemotePage extends StatelessWidget {
   final VoidCallback onSyncToLocal;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+  final VoidCallback onRefresh;
+  final bool isRefreshing;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '云端仓库',
       count: '${items.length} 项',
+      onRefresh: onRefresh,
+      isRefreshing: isRefreshing,
       children: [
         Row(
           children: [
@@ -1733,6 +1789,8 @@ class _RemoteHistoryPage extends StatelessWidget {
     required this.onSyncToRemote,
     required this.onSyncToWorkspace,
     required this.onSyncToLocal,
+    required this.onRefresh,
+    required this.isRefreshing,
   });
 
   final List<HistoryEntry> snapshots;
@@ -1746,12 +1804,16 @@ class _RemoteHistoryPage extends StatelessWidget {
   final VoidCallback onSyncToRemote;
   final VoidCallback onSyncToWorkspace;
   final VoidCallback onSyncToLocal;
+  final VoidCallback onRefresh;
+  final bool isRefreshing;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '云端历史',
       count: '${snapshots.length} 版',
+      onRefresh: onRefresh,
+      isRefreshing: isRefreshing,
       children: [
         _HistoryToolbar(
           snapshots: snapshots,
@@ -1847,11 +1909,15 @@ class _PageShell extends StatelessWidget {
     required this.title,
     required this.count,
     required this.children,
+    required this.onRefresh,
+    required this.isRefreshing,
   });
 
   final String title;
   final String count;
   final List<Widget> children;
+  final VoidCallback onRefresh;
+  final bool isRefreshing;
 
   @override
   Widget build(BuildContext context) {
@@ -1864,6 +1930,17 @@ class _PageShell extends StatelessWidget {
             const Spacer(),
             if (count.isNotEmpty)
               Chip(label: Text(count), visualDensity: VisualDensity.compact),
+            const SizedBox(width: 6),
+            IconButton(
+              tooltip: '刷新',
+              onPressed: isRefreshing ? null : onRefresh,
+              icon: isRefreshing
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh_outlined),
+            ),
           ],
         ),
         const SizedBox(height: 8),
