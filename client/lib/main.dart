@@ -7,6 +7,15 @@ import 'package:flutter/material.dart';
 import 'package:omo_switcher_client/local_store.dart';
 import 'package:omo_switcher_client/workspace.dart';
 
+typedef DesktopProcessRunner =
+    Future<ProcessResult> Function(String executable, List<String> args);
+typedef DesktopProcessStarter =
+    Future<void> Function(
+      String executable,
+      List<String> args, {
+      required bool runInShell,
+    });
+
 void main() {
   runApp(
     MyApp(
@@ -16,6 +25,111 @@ void main() {
     ),
   );
 }
+
+class DesktopRestartResult {
+  const DesktopRestartResult({required this.ok, required this.log});
+
+  final bool ok;
+  final List<String> log;
+}
+
+Future<DesktopRestartResult> restartLocalDesktop({
+  String? operatingSystem,
+  Map<String, String>? environment,
+  bool Function(String path)? exists,
+  DesktopProcessRunner? runProcess,
+  DesktopProcessStarter? startProcess,
+}) async {
+  final os = operatingSystem ?? Platform.operatingSystem;
+  final env = environment ?? Platform.environment;
+  final fileExists = exists ?? (path) => File(path).existsSync();
+  final run =
+      runProcess ??
+      (executable, args) => Process.run(executable, args, runInShell: false);
+  final start =
+      startProcess ??
+      (executable, args, {required runInShell}) async {
+        await Process.start(
+          executable,
+          args,
+          mode: ProcessStartMode.detached,
+          runInShell: runInShell,
+        );
+      };
+  final log = <String>[];
+
+  if (os == 'windows') {
+    final kill = await run('taskkill', const [
+      '/IM',
+      'OpenCode.exe',
+      '/T',
+      '/F',
+    ]);
+    if (kill.exitCode == 0) {
+      log.add('[kill] OpenCode.exe');
+    } else {
+      final message = '${kill.stdout}${kill.stderr}'.trim();
+      log.add(message.isEmpty ? '[kill] 未发现 OpenCode.exe' : '[kill] $message');
+    }
+
+    final launch = _windowsOpenCodeLaunchCommand(env, fileExists);
+    try {
+      await start(launch, const [], runInShell: _isBareCommand(launch));
+      log.add('[launch] $launch');
+      return DesktopRestartResult(ok: true, log: log);
+    } catch (error) {
+      log.add('[launch-failed] $error');
+      return DesktopRestartResult(ok: false, log: log);
+    }
+  }
+
+  if (os == 'macos') {
+    await run('pkill', const ['-x', 'OpenCode']);
+    try {
+      await start('open', const ['-a', 'OpenCode'], runInShell: false);
+      log.add('[launch] open -a OpenCode');
+      return DesktopRestartResult(ok: true, log: log);
+    } catch (error) {
+      log.add('[launch-failed] $error');
+      return DesktopRestartResult(ok: false, log: log);
+    }
+  }
+
+  return DesktopRestartResult(ok: false, log: ['暂未支持的平台: $os']);
+}
+
+String _windowsOpenCodeLaunchCommand(
+  Map<String, String> env,
+  bool Function(String path) exists,
+) {
+  final localAppData =
+      env['LOCALAPPDATA'] ??
+      (env['USERPROFILE'] == null
+          ? null
+          : '${env['USERPROFILE']}\\AppData\\Local');
+  final candidates =
+      [
+            env['RESTART_LAUNCH_CMD'],
+            if (localAppData != null)
+              '$localAppData\\Programs\\@opencode-aidesktop\\OpenCode.exe',
+            if (localAppData != null)
+              '$localAppData\\Programs\\OpenCode\\OpenCode.exe',
+            if (env['ProgramFiles'] != null)
+              '${env['ProgramFiles']}\\OpenCode\\OpenCode.exe',
+            'OpenCode.exe',
+          ]
+          .whereType<String>()
+          .map((item) => item.trim())
+          .where((item) => item.isNotEmpty);
+
+  for (final candidate in candidates) {
+    if (_isBareCommand(candidate) || exists(candidate)) return candidate;
+  }
+  return 'OpenCode.exe';
+}
+
+bool _isBareCommand(String value) =>
+    !value.contains(r'\') && !value.contains('/') && !value.contains(':');
 
 class MyApp extends StatelessWidget {
   const MyApp({
@@ -833,11 +947,12 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
     );
   }
 
-  // 工作目录已本机化：opencode 在本机运行，重启需手动执行（GUI/进程无法可靠代劳）。
   Future<void> _restartDesktop() async {
-    setState(
-      () => restartDesktopLog = '工作目录配置已更新。请手动重启 opencode Desktop 使其生效。',
-    );
+    setState(() => restartDesktopLog = '正在重启 opencode Desktop...');
+    final result = await restartLocalDesktop();
+    if (!mounted) return;
+    setState(() => restartDesktopLog = result.log.join('\n'));
+    _notice(result.ok ? '已重启 Desktop' : '重启 Desktop 失败');
   }
 
   Future<void> _restartTui() async {
