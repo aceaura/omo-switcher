@@ -32,13 +32,27 @@ class TierMeta {
 
 // 档位展示元数据（镜像 config.js tierMeta）。
 const Map<String, TierMeta> kTierMeta = {
-  'token-saving': TierMeta(1, '省钱 · Token Saving', '#3fb950'),
-  'predictable-cost': TierMeta(2, '可预测成本 · Predictable Cost', '#58a6ff'),
-  'balanced': TierMeta(3, '均衡 · Balanced', '#d29922'),
-  'quality-first': TierMeta(4, '质量优先 · Quality First', '#f85149'),
+  'opus-ultra': TierMeta(1, 'OpusMode · Ultra', '#f85149'),
+  'opus-high': TierMeta(2, 'OpusMode · High', '#d29922'),
+  'opus-medium': TierMeta(3, 'OpusMode · Medium', '#58a6ff'),
+  'opus-low': TierMeta(4, 'OpusMode · Low', '#3fb950'),
+  'gpt-ultra': TierMeta(5, 'GptMode · Ultra', '#f85149'),
+  'gpt-high': TierMeta(6, 'GptMode · High', '#d29922'),
+  'gpt-medium': TierMeta(7, 'GptMode · Medium', '#58a6ff'),
+  'gpt-low': TierMeta(8, 'GptMode · Low', '#3fb950'),
+  'token-saving': TierMeta(101, '省钱 · Token Saving', '#3fb950'),
+  'predictable-cost': TierMeta(102, '可预测成本 · Predictable Cost', '#58a6ff'),
+  'balanced': TierMeta(103, '均衡 · Balanced', '#d29922'),
+  'quality-first': TierMeta(104, '质量优先 · Quality First', '#f85149'),
 };
 
-final RegExp _slugRe = RegExp(r'^[a-z0-9-]+$');
+final RegExp _slugRe = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$');
+
+bool _isSafeSlug(String slug) => _slugRe.hasMatch(slug);
+
+void _assertSafeSlug(String slug) {
+  if (!_isSafeSlug(slug)) throw ArgumentError('非法档位名: $slug');
+}
 
 class WorkspaceTier {
   const WorkspaceTier({
@@ -78,7 +92,8 @@ Directory defaultOpencodeDirectory({
   final sep = pathSeparator ?? (os == 'windows' ? r'\' : '/');
   final override = env['OPENCODE_DIR'];
   if (override != null && override.isNotEmpty) return Directory(override);
-  final home = (os == 'windows' ? env['USERPROFILE'] : env['HOME']) ??
+  final home =
+      (os == 'windows' ? env['USERPROFILE'] : env['HOME']) ??
       env['USERPROFILE'] ??
       env['HOME'] ??
       Directory.current.path;
@@ -93,7 +108,8 @@ class LocalWorkspace {
   Directory resolveDir() => _override ?? defaultOpencodeDirectory();
   String get path => resolveDir().path;
 
-  String _join(String name) => '${resolveDir().path}${Platform.pathSeparator}$name';
+  String _join(String name) =>
+      '${resolveDir().path}${Platform.pathSeparator}$name';
 
   // 列出工作目录中的全部档位包（不含 zip 内容，sha256 取原始 zip 字节）。
   Future<List<ConfigItem>> listBundles() async {
@@ -105,35 +121,65 @@ class LocalWorkspace {
       final name = entity.uri.pathSegments.last;
       if (!name.endsWith('.zip')) continue;
       final slug = name.substring(0, name.length - 4);
-      if (!_slugRe.hasMatch(slug)) continue;
+      if (!_isSafeSlug(slug)) continue;
       final bytes = entity.readAsBytesSync();
       final meta = kTierMeta[slug];
-      items.add(ConfigItem(
-        key: slug,
-        label: meta?.label ?? slug,
-        sha256: sha256.convert(bytes).toString(),
-        size: bytes.length,
-        provider: 'bundle',
-        tierSlug: slug,
-        tierIndex: meta?.index ?? 999,
-        files: _memberNames(slug, bytes),
-      ));
+      items.add(
+        ConfigItem(
+          key: slug,
+          label: meta?.label ?? slug,
+          sha256: sha256.convert(bytes).toString(),
+          size: bytes.length,
+          provider: 'bundle',
+          tierSlug: slug,
+          tierIndex: meta?.index ?? 999,
+          files: _memberNames(slug, bytes),
+        ),
+      );
     }
-    items.sort((a, b) => (a.tierIndex ?? 999).compareTo(b.tierIndex ?? 999));
+    items.sort((a, b) {
+      final byIndex = (a.tierIndex ?? 999).compareTo(b.tierIndex ?? 999);
+      if (byIndex != 0) return byIndex;
+      return a.key.compareTo(b.key);
+    });
     return items;
   }
 
   // 读取某档位 zip 的原始字节 -> base64（用于上传云端 / 存入本地仓库）。
   // 用同步 IO：文件很小，且在 widget test 的 fake-async 区里异步 IO 不会推进。
   Future<String> readBundleB64(String slug) async {
+    _assertSafeSlug(slug);
     return base64Encode(File(_join('$slug.zip')).readAsBytesSync());
   }
 
   // 把 zip 字节写入 <slug>.zip（云端/本地仓库 -> 工作目录）。
   Future<void> writeBundle(String slug, String contentB64) async {
+    _assertSafeSlug(slug);
     final dir = resolveDir();
     dir.createSync(recursive: true);
     File(_join('$slug.zip')).writeAsBytesSync(base64Decode(contentB64));
+  }
+
+  Future<List<String>> deleteBundles(List<String> slugs) async {
+    final deleted = <String>[];
+    for (final slug in slugs.toSet()) {
+      _assertSafeSlug(slug);
+      final file = File(_join('$slug.zip'));
+      if (!file.existsSync()) continue;
+      file.deleteSync();
+      deleted.add(slug);
+    }
+    return deleted;
+  }
+
+  Future<void> renameBundle(String oldSlug, String newSlug) async {
+    _assertSafeSlug(oldSlug);
+    _assertSafeSlug(newSlug);
+    final oldFile = File(_join('$oldSlug.zip'));
+    final newFile = File(_join('$newSlug.zip'));
+    if (!oldFile.existsSync()) throw Exception('档位 zip 不存在: $oldSlug.zip');
+    if (newFile.existsSync()) throw Exception('目标档位已存在: $newSlug.zip');
+    oldFile.renameSync(newFile.path);
   }
 
   // 汇总状态：tiers（按 index 排序）+ 当前生效档位（按 base 文件字节比对）。
@@ -148,20 +194,26 @@ class LocalWorkspace {
         final name = entity.uri.pathSegments.last;
         if (!name.endsWith('.zip')) continue;
         final slug = name.substring(0, name.length - 4);
-        if (!_slugRe.hasMatch(slug)) continue;
+        if (!_isSafeSlug(slug)) continue;
         final entries = _extractEntries(slug, entity.readAsBytesSync());
         bundleEntries[slug] = entries;
         final meta = kTierMeta[slug];
-        tiers.add(WorkspaceTier(
-          slug: slug,
-          index: meta?.index ?? 999,
-          label: meta?.label ?? slug,
-          color: meta?.color ?? '#8b949e',
-          files: entries.keys.toList()..sort(),
-        ));
+        tiers.add(
+          WorkspaceTier(
+            slug: slug,
+            index: meta?.index ?? 999,
+            label: meta?.label ?? slug,
+            color: meta?.color ?? '#8b949e',
+            files: entries.keys.toList()..sort(),
+          ),
+        );
       }
     }
-    tiers.sort((a, b) => a.index.compareTo(b.index));
+    tiers.sort((a, b) {
+      final byIndex = a.index.compareTo(b.index);
+      if (byIndex != 0) return byIndex;
+      return a.slug.compareTo(b.slug);
+    });
 
     final active = <String, String?>{};
     for (final entry in kProviderPrefixes.entries) {
@@ -175,6 +227,7 @@ class LocalWorkspace {
 
   // 应用档位（本地 switch）：解出 <slug>.zip 的成员，写入工作目录。返回写入日志。
   Future<List<String>> applyTier(String slug) async {
+    _assertSafeSlug(slug);
     final file = File(_join('$slug.zip'));
     if (!file.existsSync()) throw Exception('档位 zip 不存在: $slug.zip');
     final entries = _extractEntries(slug, file.readAsBytesSync());
@@ -219,8 +272,9 @@ class LocalWorkspace {
     if (kSharedFiles.contains(name)) return name;
     for (final prefix in kProviderPrefixes.values) {
       if (name == '$prefix.json') return name;
-      // 前缀与 slug 仅含字母/数字/连字符，正则中无需转义。
-      if (RegExp('^$prefix\\.\\d+-$slug\\.json\$').hasMatch(name)) {
+      final safePrefix = RegExp.escape(prefix);
+      final safeSlug = RegExp.escape(slug);
+      if (RegExp('^$safePrefix\\.\\d+-$safeSlug\\.json\$').hasMatch(name)) {
         return '$prefix.json';
       }
     }

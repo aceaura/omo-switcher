@@ -127,6 +127,55 @@ app.post(
   })
 );
 
+// 从云端当前仓库删除配置项：用“剩余集合”生成新快照，不修改历史快照。
+app.delete(
+  '/api/config/items',
+  h(async (req, res) => {
+    const { keys, note } = req.body || {};
+    if (!Array.isArray(keys) || !keys.length) return fail(res, 'BAD_PARAM', '缺少 keys');
+    const uniqueKeys = [...new Set(keys.map((key) => String(key)))];
+    for (const key of uniqueKeys) {
+      if (!isAllowedKey(key)) return fail(res, 'BAD_KEY', `非法档位: ${key}`);
+    }
+
+    let current = await versions.getCurrentItems();
+    if (!current.length) {
+      const scanned = await scanLocalBundles();
+      current = await Promise.all(scanned.map((item) => buildLocalBundle(item.key)));
+    }
+    const remaining = current.filter((item) => !uniqueKeys.includes(item.key));
+    const snapshotId = await versions.createSnapshot(remaining, {
+      note: note || `delete ${uniqueKeys.join(', ')}`,
+      parentId: await versions.getHead(),
+    });
+    ok(res, { snapshotId, deleted: uniqueKeys });
+  })
+);
+
+// 从云端当前仓库重命名配置项：用“重命名后的集合”生成新快照，不修改历史快照。
+app.post(
+  '/api/config/item/:key/rename',
+  h(async (req, res) => {
+    const { key } = req.params;
+    const { newKey, note } = req.body || {};
+    if (!isAllowedKey(key)) return fail(res, 'BAD_KEY', `非法档位: ${key}`);
+    if (!isAllowedKey(newKey)) return fail(res, 'BAD_KEY', `非法目标档位: ${newKey}`);
+    let current = await versions.getCurrentItems();
+    if (!current.length) {
+      const scanned = await scanLocalBundles();
+      current = await Promise.all(scanned.map((item) => buildLocalBundle(item.key)));
+      await versions.createSnapshot(current, { note: 'import filesystem before rename' });
+    }
+    const found = current.find((item) => item.key === key);
+    if (!found) return fail(res, 'NOT_FOUND', `当前云端仓库无档位: ${key}`, 404);
+    if (current.some((item) => item.key === newKey)) {
+      return fail(res, 'CONFLICT', `目标档位已存在: ${newKey}`, 409);
+    }
+    const snapshotId = await versions.renameCurrentItem(key, newKey, { note });
+    ok(res, { snapshotId, key, newKey });
+  })
+);
+
 // diff：客户端传本地档位清单，返回与远端当前的差异。
 app.post(
   '/api/config/diff',
@@ -135,6 +184,47 @@ app.post(
     let remote = await versions.getCurrentItems();
     if (!remote.length) remote = await scanLocalBundles();
     ok(res, { diff: diffItems(local, remote) });
+  })
+);
+
+// ---- 版本快照 / 回滚 (FR-4) ----
+// 历史版本列表（按时间倒序）：{ head, items:[{id,ts,note,parentId,keys[]}] }
+app.get(
+  '/api/snapshots',
+  h(async (req, res) => {
+    const limit = Number(req.query.limit || 50);
+    ok(res, await versions.listSnapshots(limit));
+  })
+);
+
+// 某快照详情（含各项 sha/size，不含 zip 大内容）。
+app.get(
+  '/api/snapshots/:id',
+  h(async (req, res) => {
+    const snap = await versions.getSnapshot(req.params.id);
+    if (!snap) return fail(res, 'NOT_FOUND', `快照不存在: ${req.params.id}`, 404);
+    ok(res, { ...snap.meta, items: snap.items });
+  })
+);
+
+// 整体回滚到该版本（复制旧快照内容→新快照并指向）。
+app.post(
+  '/api/snapshots/:id/rollback',
+  h(async (req, res) => {
+    const { note } = req.body || {};
+    const snapshotId = await versions.rollbackAll(req.params.id, { note });
+    ok(res, { snapshotId });
+  })
+);
+
+// 单文件回滚（从该版本取单个档位包覆盖当前内容集→新快照）。
+app.post(
+  '/api/snapshots/:id/rollback-file',
+  h(async (req, res) => {
+    const { key, note } = req.body || {};
+    if (!isAllowedKey(key)) return fail(res, 'BAD_KEY', `非法档位: ${key}`);
+    const snapshotId = await versions.rollbackFile(req.params.id, key, { note });
+    ok(res, { snapshotId });
   })
 );
 

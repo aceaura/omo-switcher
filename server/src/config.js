@@ -20,11 +20,17 @@ export const config = {
   },
 
   // 性能档位的展示元数据（key 取文件名中的 slug 部分）
+  // 两套模式族，每族 4 档：OpusMode = Opus 4.8 + DeepSeek V4 Pro 为主（GPT-5.5 辅助）；
+  // GptMode = GPT-5.5 + DeepSeek V4 Pro 为主（Opus 4.8 辅助）。颜色按强度 ultra>high>medium>low。
   tierMeta: {
-    'token-saving': { index: 1, label: '省钱 · Token Saving', color: '#3fb950' },
-    'predictable-cost': { index: 2, label: '可预测成本 · Predictable Cost', color: '#58a6ff' },
-    'balanced': { index: 3, label: '均衡 · Balanced', color: '#d29922' },
-    'quality-first': { index: 4, label: '质量优先 · Quality First', color: '#f85149' },
+    'opus-ultra': { index: 1, label: 'OpusMode · Ultra', color: '#f85149' },
+    'opus-high': { index: 2, label: 'OpusMode · High', color: '#d29922' },
+    'opus-medium': { index: 3, label: 'OpusMode · Medium', color: '#58a6ff' },
+    'opus-low': { index: 4, label: 'OpusMode · Low', color: '#3fb950' },
+    'gpt-ultra': { index: 5, label: 'GptMode · Ultra', color: '#f85149' },
+    'gpt-high': { index: 6, label: 'GptMode · High', color: '#d29922' },
+    'gpt-medium': { index: 7, label: 'GptMode · Medium', color: '#58a6ff' },
+    'gpt-low': { index: 8, label: 'GptMode · Low', color: '#3fb950' },
   },
 
   redis: {

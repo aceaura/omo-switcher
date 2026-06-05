@@ -50,7 +50,9 @@ class SqliteLocalStore implements LocalStore {
 
   @override
   Future<String?> getSetting(String key) async {
-    final rs = _database.select('SELECT value FROM settings WHERE key = ?', [key]);
+    final rs = _database.select('SELECT value FROM settings WHERE key = ?', [
+      key,
+    ]);
     if (rs.isEmpty) return null;
     return rs.first['value'] as String?;
   }
@@ -66,9 +68,7 @@ class SqliteLocalStore implements LocalStore {
 
   @override
   Future<List<ConfigItem>> listItems() async {
-    final rs = _database.select(
-      'SELECT * FROM items ORDER BY tier_index, key',
-    );
+    final rs = _database.select('SELECT * FROM items ORDER BY tier_index, key');
     return rs.map(_itemFromRow).toList();
   }
 
@@ -80,8 +80,39 @@ class SqliteLocalStore implements LocalStore {
   }
 
   @override
-  Future<void> upsertItem(ConfigItem item, String source) async {
-    _writeItemRow(item.copyWith(source: source));
+  Future<void> upsertItem(ConfigItem item, String source) =>
+      upsertItems([item], source);
+
+  @override
+  Future<void> upsertItems(List<ConfigItem> items, String source) async {
+    if (items.isEmpty) return;
+    for (final item in items) {
+      _writeItemRow(item.copyWith(source: source));
+    }
+    // 整批写完只追加一条快照：一次同步=一条历史。
+    await _appendSnapshot(await listItems(), source);
+  }
+
+  @override
+  Future<void> deleteItems(List<String> keys, String source) async {
+    final keySet = keys.toSet();
+    if (keySet.isEmpty) return;
+    final placeholders = List.filled(keySet.length, '?').join(', ');
+    _database.execute(
+      'DELETE FROM items WHERE key IN ($placeholders)',
+      keySet.toList(),
+    );
+    await _appendSnapshot(await listItems(), source);
+  }
+
+  @override
+  Future<void> renameItem(String oldKey, String newKey, String source) async {
+    final existing = await getItem(oldKey);
+    if (existing == null) throw StateError('本地仓库中不存在: $oldKey');
+    final target = await getItem(newKey);
+    if (target != null) throw StateError('目标档位已存在: $newKey');
+    _database.execute('DELETE FROM items WHERE key = ?', [oldKey]);
+    _writeItemRow(existing.renamed(newKey).copyWith(source: source));
     await _appendSnapshot(await listItems(), source);
   }
 
@@ -91,7 +122,10 @@ class SqliteLocalStore implements LocalStore {
     for (final item in items) {
       _writeItemRow(item.copyWith(source: source));
     }
-    await _appendSnapshot(items.map((i) => i.copyWith(source: source)).toList(), source);
+    await _appendSnapshot(
+      items.map((i) => i.copyWith(source: source)).toList(),
+      source,
+    );
   }
 
   @override
@@ -100,12 +134,14 @@ class SqliteLocalStore implements LocalStore {
       'SELECT id, ts, note, keys_json FROM snapshots ORDER BY ts DESC',
     );
     return rs
-        .map((row) => HistoryEntry.fromJson({
-              'id': row['id'],
-              'ts': row['ts'],
-              'note': row['note'],
-              'keys': jsonDecode((row['keys_json'] as String?) ?? '[]'),
-            }))
+        .map(
+          (row) => HistoryEntry.fromJson({
+            'id': row['id'],
+            'ts': row['ts'],
+            'note': row['note'],
+            'keys': jsonDecode((row['keys_json'] as String?) ?? '[]'),
+          }),
+        )
         .toList();
   }
 
@@ -125,19 +161,19 @@ class SqliteLocalStore implements LocalStore {
   // ---- 内部 ----
 
   ConfigItem _itemFromRow(Row row) => ConfigItem(
-        key: row['key'] as String,
-        label: row['label'] as String?,
-        sha256: row['sha256'] as String?,
-        contentB64: row['content_b64'] as String?,
-        provider: (row['provider'] as String?) ?? 'bundle',
-        tierSlug: row['tier_slug'] as String?,
-        tierIndex: (row['tier_index'] as num?)?.toInt(),
-        size: (row['size'] as num?)?.toInt(),
-        source: row['source'] as String?,
-        files: (jsonDecode((row['files_json'] as String?) ?? '[]') as List)
-            .map((e) => e.toString())
-            .toList(),
-      );
+    key: row['key'] as String,
+    label: row['label'] as String?,
+    sha256: row['sha256'] as String?,
+    contentB64: row['content_b64'] as String?,
+    provider: (row['provider'] as String?) ?? 'bundle',
+    tierSlug: row['tier_slug'] as String?,
+    tierIndex: (row['tier_index'] as num?)?.toInt(),
+    size: (row['size'] as num?)?.toInt(),
+    source: row['source'] as String?,
+    files: (jsonDecode((row['files_json'] as String?) ?? '[]') as List)
+        .map((e) => e.toString())
+        .toList(),
+  );
 
   void _writeItemRow(ConfigItem item) {
     _database.execute(
@@ -166,7 +202,6 @@ class SqliteLocalStore implements LocalStore {
   }
 
   Future<void> _appendSnapshot(List<ConfigItem> items, String source) async {
-    if (items.isEmpty) return;
     final now = DateTime.now().toUtc();
     final id = '${now.microsecondsSinceEpoch}';
     _database.execute(

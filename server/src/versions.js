@@ -130,6 +130,30 @@ export async function getCurrentItems() {
   return s ? [...s.items.values()] : [];
 }
 
+export async function deleteCurrentItems(keys, { note = '' } = {}) {
+  const keySet = new Set(keys);
+  const current = await getCurrentItems();
+  const remaining = current.filter((item) => !keySet.has(item.key));
+  return createSnapshot(remaining, {
+    note: note || `delete ${keys.join(', ')}`,
+    parentId: await getHead(),
+  });
+}
+
+export async function renameCurrentItem(fromKey, toKey, { note = '' } = {}) {
+  const current = await getCurrentItems();
+  const found = current.find((item) => item.key === fromKey);
+  if (!found) throw new Error(`当前云端仓库无档位：${fromKey}`);
+  if (current.some((item) => item.key === toKey)) throw new Error(`目标档位已存在：${toKey}`);
+  const renamed = current.map((item) =>
+    item.key === fromKey ? { ...item, key: toKey, slug: toKey, tierSlug: toKey } : item
+  );
+  return createSnapshot(renamed, {
+    note: note || `rename ${fromKey} to ${toKey}`,
+    parentId: await getHead(),
+  });
+}
+
 async function getAllItemsOfSnapshot(id) {
   const redis = getRedis();
   if (redis) {

@@ -12,7 +12,9 @@
     "dev:server": "npm --prefix server run dev",
     "client": "cd client && flutter run -d macos",
     "test:client": "cd client && flutter test",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "installer:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-installer-windows.ps1",
+    "installer:macos": "bash scripts/build-installer-macos.sh"
   },
   "license": "MIT"
 }

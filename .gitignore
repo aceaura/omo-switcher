@@ -3,6 +3,9 @@ node_modules/
 .DS_Store
 client/build/
 .dart_tool/
+.tools/
+.wix/
+release/installer/
 *.sqlite
 *.sqlite-*
 .env

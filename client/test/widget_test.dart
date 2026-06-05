@@ -22,10 +22,12 @@ const _balancedFiles = {
 void _writeZip(Directory dir, String slug, Map<String, String> files) {
   final archive = Archive();
   files.forEach(
-    (name, content) => archive.add(ArchiveFile.bytes(name, utf8.encode(content))),
+    (name, content) =>
+        archive.add(ArchiveFile.bytes(name, utf8.encode(content))),
   );
-  File('${dir.path}${Platform.pathSeparator}$slug.zip')
-      .writeAsBytesSync(ZipEncoder().encodeBytes(archive));
+  File(
+    '${dir.path}${Platform.pathSeparator}$slug.zip',
+  ).writeAsBytesSync(ZipEncoder().encodeBytes(archive));
 }
 
 Directory _makeWorkspace(WidgetTester tester, {bool empty = false}) {
@@ -40,10 +42,12 @@ Directory _makeWorkspace(WidgetTester tester, {bool empty = false}) {
   if (empty) return dir;
   _writeZip(dir, 'balanced', _balancedFiles);
   // 写入与 balanced 一致的 base 文件 -> 当前生效档位 = balanced。
-  File('${dir.path}${Platform.pathSeparator}oh-my-openagent.json')
-      .writeAsStringSync(_balancedFiles['oh-my-openagent.json']!);
-  File('${dir.path}${Platform.pathSeparator}oh-my-opencode-slim.json')
-      .writeAsStringSync(_balancedFiles['oh-my-opencode-slim.json']!);
+  File(
+    '${dir.path}${Platform.pathSeparator}oh-my-openagent.json',
+  ).writeAsStringSync(_balancedFiles['oh-my-openagent.json']!);
+  File(
+    '${dir.path}${Platform.pathSeparator}oh-my-opencode-slim.json',
+  ).writeAsStringSync(_balancedFiles['oh-my-opencode-slim.json']!);
   return dir;
 }
 
@@ -55,11 +59,13 @@ void main() {
     final api = FakeApi();
     final store = MemoryStore({'server_url': 'http://127.0.0.1:7600'});
 
-    await tester.pumpWidget(MyApp(
-      api: api,
-      workspace: LocalWorkspace(directory: dir),
-      store: store,
-    ));
+    await tester.pumpWidget(
+      MyApp(
+        api: api,
+        workspace: LocalWorkspace(directory: dir),
+        store: store,
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('omo-switcher'), findsOneWidget);
@@ -82,11 +88,13 @@ void main() {
     final api = FakeApi(empty: true);
     final store = MemoryStore({'server_url': 'http://127.0.0.1:7600'});
 
-    await tester.pumpWidget(MyApp(
-      api: api,
-      workspace: LocalWorkspace(directory: dir),
-      store: store,
-    ));
+    await tester.pumpWidget(
+      MyApp(
+        api: api,
+        workspace: LocalWorkspace(directory: dir),
+        store: store,
+      ),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('常用配置').first);
@@ -102,11 +110,13 @@ void main() {
     final api = FakeApi();
     final store = MemoryStore({'server_url': 'http://127.0.0.1:7600'});
 
-    await tester.pumpWidget(MyApp(
-      api: api,
-      workspace: LocalWorkspace(directory: dir),
-      store: store,
-    ));
+    await tester.pumpWidget(
+      MyApp(
+        api: api,
+        workspace: LocalWorkspace(directory: dir),
+        store: store,
+      ),
+    );
     await tester.pumpAndSettle();
 
     // 常用配置 -> 本地仓库（读本机 zip 字节存入 store）。
@@ -147,6 +157,7 @@ class FakeApi implements OmoApi {
   final switchCalls = <(String, String)>[];
   final itemFetches = <String>[];
   final pushNotes = <String>[];
+  final renameCalls = <(String, String)>[];
   final rollbackCalls = <String>[];
 
   @override
@@ -161,14 +172,20 @@ class FakeApi implements OmoApi {
   @override
   Future<Map<String, dynamic>> switchTier(String serverUrl, String tier) async {
     switchCalls.add(('/api/switch', tier));
-    return {'ok': true, 'log': ['switched $tier']};
+    return {
+      'ok': true,
+      'log': ['switched $tier'],
+    };
   }
 
   @override
   Future<Map<String, dynamic>> restart(
     String serverUrl, {
     String? launchCmd,
-  }) async => {'ok': true, 'log': ['restarted']};
+  }) async => {
+    'ok': true,
+    'log': ['restarted'],
+  };
 
   @override
   Future<List<ConfigItem>> configItems(
@@ -207,12 +224,7 @@ class FakeApi implements OmoApi {
     List<ConfigItem> localItems,
   ) async => {
     'ok': true,
-    'diff': {
-      'onlyLocal': [],
-      'onlyRemote': [],
-      'changed': [],
-      'same': [],
-    },
+    'diff': {'onlyLocal': [], 'onlyRemote': [], 'changed': [], 'same': []},
   };
 
   @override
@@ -230,6 +242,29 @@ class FakeApi implements OmoApi {
   ) async {
     pushNotes.add(note);
     return {'ok': true, 'snapshotId': 'snap-2'};
+  }
+
+  @override
+  Future<Map<String, dynamic>> deleteRemoteItems(
+    String serverUrl,
+    List<String> keys,
+    String note,
+  ) async => {'ok': true, 'snapshotId': 'snap-delete', 'deleted': keys};
+
+  @override
+  Future<Map<String, dynamic>> renameRemoteItem(
+    String serverUrl,
+    String key,
+    String newKey,
+    String note,
+  ) async {
+    renameCalls.add((key, newKey));
+    return {
+      'ok': true,
+      'snapshotId': 'snap-rename',
+      'key': key,
+      'newKey': newKey,
+    };
   }
 
   @override
@@ -282,12 +317,38 @@ class MemoryStore implements LocalStore {
   Future<ConfigItem?> getItem(String key) async => items[key];
 
   @override
-  Future<void> upsertItem(ConfigItem item, String source) async =>
-      replaceItems([
-        for (final existing in items.values)
-          if (existing.key != item.key) existing,
-        item,
-      ], source);
+  Future<void> upsertItem(ConfigItem item, String source) =>
+      upsertItems([item], source);
+
+  @override
+  Future<void> upsertItems(List<ConfigItem> nextItems, String source) async {
+    final incoming = {for (final item in nextItems) item.key};
+    await replaceItems([
+      for (final existing in items.values)
+        if (!incoming.contains(existing.key)) existing,
+      ...nextItems,
+    ], source);
+  }
+
+  @override
+  Future<void> deleteItems(List<String> keys, String source) async {
+    final keySet = keys.toSet();
+    await replaceItems([
+      for (final existing in items.values)
+        if (!keySet.contains(existing.key)) existing,
+    ], source);
+  }
+
+  @override
+  Future<void> renameItem(String oldKey, String newKey, String source) async {
+    final item = items[oldKey];
+    if (item == null) throw StateError('本地仓库中不存在: $oldKey');
+    if (items.containsKey(newKey)) throw StateError('目标档位已存在: $newKey');
+    await replaceItems([
+      for (final existing in items.values)
+        if (existing.key == oldKey) existing.renamed(newKey) else existing,
+    ], source);
+  }
 
   @override
   Future<void> replaceItems(List<ConfigItem> nextItems, String source) async {

@@ -26,10 +26,12 @@ const _tokenSaving = {
 void _writeZip(Directory dir, String slug, Map<String, String> files) {
   final archive = Archive();
   files.forEach(
-    (name, content) => archive.add(ArchiveFile.bytes(name, utf8.encode(content))),
+    (name, content) =>
+        archive.add(ArchiveFile.bytes(name, utf8.encode(content))),
   );
-  File('${dir.path}${Platform.pathSeparator}$slug.zip')
-      .writeAsBytesSync(ZipEncoder().encodeBytes(archive));
+  File(
+    '${dir.path}${Platform.pathSeparator}$slug.zip',
+  ).writeAsBytesSync(ZipEncoder().encodeBytes(archive));
 }
 
 void main() {
@@ -71,15 +73,57 @@ void main() {
     expect(balanced.files.length, 6);
     expect(balanced.files, containsAll(_balanced.keys));
     expect(balanced.sha256, isNotNull);
-    expect(balanced.tierIndex, 3);
+    expect(balanced.tierIndex, 103);
+  });
+
+  test('allows uppercase underscore and dot in safe bundle names', () async {
+    _writeZip(dir, 'Opus_Mode.v2', _balanced);
+
+    final ws = LocalWorkspace(directory: dir);
+    final items = await ws.listBundles();
+
+    expect(items.map((i) => i.key), contains('Opus_Mode.v2'));
+    expect(await ws.readBundleB64('Opus_Mode.v2'), isNotEmpty);
+  });
+
+  test('rejects path-like bundle names when writing', () async {
+    final ws = LocalWorkspace(directory: dir);
+
+    await expectLater(
+      ws.writeBundle('../escape', base64Encode(const [])),
+      throwsArgumentError,
+    );
+  });
+
+  test('renameBundle renames the zip file and rejects conflicts', () async {
+    final ws = LocalWorkspace(directory: dir);
+
+    await ws.renameBundle('balanced', 'balanced_custom');
+
+    expect(
+      File('${dir.path}${Platform.pathSeparator}balanced.zip').existsSync(),
+      isFalse,
+    );
+    expect(
+      File(
+        '${dir.path}${Platform.pathSeparator}balanced_custom.zip',
+      ).existsSync(),
+      isTrue,
+    );
+    await expectLater(
+      ws.renameBundle('balanced_custom', 'token-saving'),
+      throwsA(isA<Exception>()),
+    );
   });
 
   test('getState detects active tier from base files', () async {
     // 写入与 balanced 一致的 base 文件 -> active = balanced。
-    File('${dir.path}${Platform.pathSeparator}oh-my-openagent.json')
-        .writeAsStringSync(_balanced['oh-my-openagent.json']!);
-    File('${dir.path}${Platform.pathSeparator}oh-my-opencode-slim.json')
-        .writeAsStringSync(_balanced['oh-my-opencode-slim.json']!);
+    File(
+      '${dir.path}${Platform.pathSeparator}oh-my-openagent.json',
+    ).writeAsStringSync(_balanced['oh-my-openagent.json']!);
+    File(
+      '${dir.path}${Platform.pathSeparator}oh-my-opencode-slim.json',
+    ).writeAsStringSync(_balanced['oh-my-opencode-slim.json']!);
 
     final state = await LocalWorkspace(directory: dir).getState();
     expect(state.opencodeDir, dir.path);
@@ -89,13 +133,18 @@ void main() {
     expect(state.active['shared'], 'balanced');
   });
 
-  test('applyTier extracts bundle members into the working directory', () async {
-    await LocalWorkspace(directory: dir).applyTier('token-saving');
-    final omo = File('${dir.path}${Platform.pathSeparator}oh-my-openagent.json');
-    expect(omo.existsSync(), isTrue);
-    expect(omo.readAsStringSync(), _tokenSaving['oh-my-openagent.json']);
-    // 应用后 active 应为 token-saving。
-    final state = await LocalWorkspace(directory: dir).getState();
-    expect(state.active['shared'], 'token-saving');
-  });
+  test(
+    'applyTier extracts bundle members into the working directory',
+    () async {
+      await LocalWorkspace(directory: dir).applyTier('token-saving');
+      final omo = File(
+        '${dir.path}${Platform.pathSeparator}oh-my-openagent.json',
+      );
+      expect(omo.existsSync(), isTrue);
+      expect(omo.readAsStringSync(), _tokenSaving['oh-my-openagent.json']);
+      // 应用后 active 应为 token-saving。
+      final state = await LocalWorkspace(directory: dir).getState();
+      expect(state.active['shared'], 'token-saving');
+    },
+  );
 }

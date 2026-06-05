@@ -8,6 +8,15 @@ import JSZip from 'jszip';
 import { config } from './config.js';
 
 const FIXED_DATE = new Date('2000-01-01T00:00:00Z');
+const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function isSafeSlug(slug) {
+  return typeof slug === 'string' && SLUG_RE.test(slug);
+}
 
 function sha256(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
@@ -27,8 +36,9 @@ export function allowedBundleNames() {
 
 function normalizeBundleName(slug, name) {
   if (allowedBundleNames().has(name)) return name;
+  const safeSlug = escapeRegExp(slug);
   for (const prov of Object.values(config.providers)) {
-    const re = new RegExp(`^${prov.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.\\d+-${slug}\\.json$`);
+    const re = new RegExp(`^${escapeRegExp(prov.prefix)}\\.\\d+-${safeSlug}\\.json$`);
     if (re.test(name)) return `${prov.prefix}.json`;
   }
   return null;
@@ -65,6 +75,7 @@ async function readZipMetadata(slug, buf) {
 }
 
 export async function buildTierBundle(slug) {
+  if (!isSafeSlug(slug)) throw new Error(`非法档位名：${slug}`);
   const file = zipPath(slug);
   if (!fs.existsSync(file)) throw new Error(`档位 zip 不存在：${path.basename(file)}`);
   const buf = await completeZipBuffer(slug, fs.readFileSync(file));
@@ -127,6 +138,7 @@ async function normalizeZipBuffer(slug, buf) {
 }
 
 export async function writeTierBundle(slug, contentB64) {
+  if (!isSafeSlug(slug)) throw new Error(`非法档位名：${slug}`);
   fs.mkdirSync(config.opencodeDir, { recursive: true });
   const buf = await normalizeZipBuffer(slug, Buffer.from(contentB64, 'base64'));
   const meta = await readZipMetadata(slug, buf);
@@ -142,17 +154,16 @@ export async function listTierBundles() {
   for (const entry of entries) {
     if (!entry.endsWith('.zip')) continue;
     const slug = entry.slice(0, -'.zip'.length);
-    if (!/^[a-z0-9-]+$/.test(slug)) continue;
+    if (!isSafeSlug(slug)) continue;
     const b = await buildTierBundle(slug);
     bundles.push(b);
   }
-  bundles.sort((a, b) => a.index - b.index);
+  bundles.sort((a, b) => a.index - b.index || a.key.localeCompare(b.key));
   return bundles;
 }
 
 export function isAllowedSlug(slug) {
-  if (typeof slug !== 'string' || !/^[a-z0-9-]+$/.test(slug)) return false;
-  return Object.keys(config.tierMeta).includes(slug) || fs.existsSync(zipPath(slug));
+  return isSafeSlug(slug);
 }
 
 export async function extractTierBundle(slug) {

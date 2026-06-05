@@ -9,8 +9,7 @@
 
 ## 0. 重要变更：同步单位 = 档位包 (bundle/zip)  ⭐ 2026-06-02
 
-同步/版本的单位从「8 个散文件」改为「**4 个档位包 (zip)**」，key = 档位 slug（`token-saving` /
-`predictable-cost` / `balanced` / `quality-first`）。本节**取代** §3.1 / §4.2 中以单文件为单位的描述。
+同步/版本的单位从「散文件」改为「**档位包 (zip)**」，key = 档位 slug。slug 不再限制为固定 4/8 档，可使用安全文件名字符（字母、数字、下划线、点、连字符；首字符必须为字母/数字）。本节**取代** §3.1 / §4.2 中以单文件为单位的描述。
 
 **每个档位包 `<slug>.zip` 内容**（由 `server/src/bundle.js` 确定性打包）：
 
@@ -27,11 +26,12 @@
 - **确定性打包**：所有 entry 用固定 mtime(2000-01-01) + DEFLATE level 6 → 内容不变则 zip 字节不变 → sha256 稳定 → diff 准确。
 - **安全**：默认保留真实密钥（用户要求）。zip 仅进本机 Redis/SQLite，私有仓库不含数据库文件。
 - **switch 不变**：`applyTier` 仍是把单个档位文件复制到 base 文件；打包只服务于"同步/版本"。
-- **UI**：同步/历史列表只显示 slug（如 `balanced`），完整 label 与所含文件放进悬浮 title。
+- **UI**：同步/历史列表只显示 slug（如 `opus-high`），完整 label 与所含文件放进悬浮 title。
 - **API 调整**：
   - `GET /api/config/items[?fs=1]`：列档位包元数据(key=slug，不含 zip)。`fs=1` 强制扫本机文件系统(用于"导入本机")，否则取远端 head 快照。
   - `GET /api/config/item/:slug[?snapshot=<id>|?fs=1]`：取该档位 zip(contentB64)。
   - `POST /api/config/push`：items=[{key:slug, contentB64, sha256}] → 生成快照。
+  - `DELETE /api/config/items`：keys=[slug] → 以剩余集合生成新快照，历史快照不可变。
   - 版本/回滚（`versions.js`）内容无关，key 换成 slug、内容换成 zip 即可，逻辑不变。
 - 新增模块：`server/src/bundle.js`（`buildTierBundle` / `listTierBundles` / `tierMemberFiles` / `isAllowedSlug`）。依赖 `jszip`。
 
@@ -58,11 +58,12 @@ omo-switcher/
 │       ├── versions.js          # ⛔TODO Redis 快照版本库 + 回滚（FR-4）
 │       ├── sync.js              # ⛔TODO 配置项 diff + 同步原语（FR-3）
 │       └── index.js             # ⛔TODO Express 路由汇总
-└── client/                      # Flutter macOS 桌面客户端
+└── client/                      # Flutter 桌面客户端
     ├── pubspec.yaml             # Flutter manifest
     ├── lib/main.dart            # UI + HTTP API + 本地存储
     ├── test/widget_test.dart    # Flutter widget tests
-    └── macos/                   # macOS runner
+    ├── macos/                   # macOS runner
+    └── windows/                 # Windows runner
 ```
 
 ✅=已实现，⛔=待实现。
@@ -77,7 +78,7 @@ omo-switcher/
 | 服务端模块制式 | **ESM** (`"type":"module"`) | Node 25 原生支持；与 `presets.js` 等一致。 |
 | 服务端状态/版本库 | **Redis**（`ioredis`） | 用户指定。当前档位、切换历史、配置快照版本均存 Redis。 |
 | Redis 不可用 | **内存退回** | 见 store.js；保证无 Redis 也能跑（带告警）。NFR-1。 |
-| 客户端 | **Flutter macOS** | 使用 Flutter 重构当前客户端，保留桌面体验。 |
+| 客户端 | **Flutter Windows/macOS** | 使用 Flutter 重构当前客户端，保留桌面体验。 |
 | 客户端本地存储 | **本地 JSON 文件** | 保存 server_url/theme 与配置项缓存，避免原生模块重建。 |
 | 文件切换 | **`fs.copyFile` 整文件字节复制** | 保留 BOM / 原始格式，绝不 JSON 重序列化。见 requirements §2。 |
 | 重启 | **`pkill`-式精确杀 + `osascript` 新终端** | macOS 一键重启。FR-2。 |
@@ -286,7 +287,7 @@ export function diffItems(localItems, remoteItems): {
 ---
 
 ## 7. 安全与一致性细则
-- 白名单：服务端任何按 `key` 访问的接口，先用正则校验 `key` 属于 8 个合法 tier 文件之一，拒绝路径分隔符。
+- 白名单：服务端任何按 `key` 访问的接口，先校验 slug 安全字符集，并要求它存在于内置元数据或对应 `<slug>.zip` 已存在，拒绝路径分隔符。
 - 备份回滚：见 5.4。
 - 凭据隔离：永不读取/同步 `opencode.jsonc`、`auth.json`；`.gitignore` 已忽略 `.env`、`*.sqlite`。
 - 字节保真：所有内容走 base64，sha256 校验；切换走 `copyFile`。

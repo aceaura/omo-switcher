@@ -21,9 +21,7 @@ void main() {
 
   test('falls back to APPDATA when LOCALAPPDATA is unavailable', () {
     final directory = defaultLocalStoreDirectory(
-      environment: const {
-        'APPDATA': r'C:\Users\tester\AppData\Roaming',
-      },
+      environment: const {'APPDATA': r'C:\Users\tester\AppData\Roaming'},
       operatingSystem: 'windows',
       currentPath: r'C:\workspace\omo-switcher\client',
       pathSeparator: r'\',

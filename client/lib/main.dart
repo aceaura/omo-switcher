@@ -8,11 +8,13 @@ import 'package:omo_switcher_client/local_store.dart';
 import 'package:omo_switcher_client/workspace.dart';
 
 void main() {
-  runApp(MyApp(
-    api: HttpOmoApi(),
-    workspace: LocalWorkspace(),
-    store: SqliteLocalStore(),
-  ));
+  runApp(
+    MyApp(
+      api: HttpOmoApi(),
+      workspace: LocalWorkspace(),
+      store: SqliteLocalStore(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -95,6 +97,17 @@ abstract class OmoApi {
     List<ConfigItem> items,
     String note,
   );
+  Future<Map<String, dynamic>> deleteRemoteItems(
+    String serverUrl,
+    List<String> keys,
+    String note,
+  );
+  Future<Map<String, dynamic>> renameRemoteItem(
+    String serverUrl,
+    String key,
+    String newKey,
+    String note,
+  );
   Future<Map<String, dynamic>> snapshots(String serverUrl, {int limit = 50});
   Future<Map<String, dynamic>> snapshot(String serverUrl, String id);
   Future<Map<String, dynamic>> rollbackSnapshot(String serverUrl, String id);
@@ -111,6 +124,10 @@ abstract class LocalStore {
   Future<List<ConfigItem>> listItems();
   Future<ConfigItem?> getItem(String key);
   Future<void> upsertItem(ConfigItem item, String source);
+  // 整批合并写入：保留未涉及的档位，并只追加一条快照（一次同步=一条历史）。
+  Future<void> upsertItems(List<ConfigItem> items, String source);
+  Future<void> deleteItems(List<String> keys, String source);
+  Future<void> renameItem(String oldKey, String newKey, String source);
   Future<void> replaceItems(List<ConfigItem> items, String source);
   Future<List<HistoryEntry>> listSnapshots();
   Future<List<ConfigItem>> snapshotItems(String id);
@@ -212,6 +229,31 @@ class HttpOmoApi implements OmoApi {
       'items': items.map((item) => item.toPushJson()).toList(),
       'note': note,
     },
+  );
+
+  @override
+  Future<Map<String, dynamic>> deleteRemoteItems(
+    String serverUrl,
+    List<String> keys,
+    String note,
+  ) => _request(
+    'DELETE',
+    serverUrl,
+    '/api/config/items',
+    body: {'keys': keys, 'note': note},
+  );
+
+  @override
+  Future<Map<String, dynamic>> renameRemoteItem(
+    String serverUrl,
+    String key,
+    String newKey,
+    String note,
+  ) => _request(
+    'POST',
+    serverUrl,
+    '/api/config/item/${Uri.encodeComponent(key)}/rename',
+    body: {'newKey': newKey, 'note': note},
   );
 
   @override
@@ -343,14 +385,49 @@ class FileLocalStore implements LocalStore {
   }
 
   @override
-  Future<void> upsertItem(ConfigItem item, String source) async {
-    final items = await listItems();
+  Future<void> upsertItem(ConfigItem item, String source) =>
+      upsertItems([item], source);
+
+  @override
+  Future<void> upsertItems(List<ConfigItem> items, String source) async {
+    if (items.isEmpty) return;
+    final incoming = {for (final item in items) item.key};
+    final existing = await listItems();
     final next = [
-      for (final existing in items)
-        if (existing.key != item.key) existing,
-      item.copyWith(source: source),
+      for (final item in existing)
+        if (!incoming.contains(item.key)) item,
+      for (final item in items) item.copyWith(source: source),
     ];
     await _writeItems(next, source);
+  }
+
+  @override
+  Future<void> deleteItems(List<String> keys, String source) async {
+    final keySet = keys.toSet();
+    if (keySet.isEmpty) return;
+    final next = [
+      for (final item in await listItems())
+        if (!keySet.contains(item.key)) item,
+    ];
+    await _writeItems(next, source);
+  }
+
+  @override
+  Future<void> renameItem(String oldKey, String newKey, String source) async {
+    final items = await listItems();
+    if (!items.any((item) => item.key == oldKey)) {
+      throw StateError('本地仓库中不存在: $oldKey');
+    }
+    if (items.any((item) => item.key == newKey)) {
+      throw StateError('目标档位已存在: $newKey');
+    }
+    await _writeItems([
+      for (final item in items)
+        if (item.key == oldKey)
+          item.renamed(newKey).copyWith(source: source)
+        else
+          item,
+    ], source);
   }
 
   @override
@@ -387,7 +464,6 @@ class FileLocalStore implements LocalStore {
   }
 
   Future<void> _appendSnapshot(List<ConfigItem> items, String source) async {
-    if (items.isEmpty) return;
     final history = await _readMap(_historyFile);
     final rows = List<Map<String, dynamic>>.from(
       (history['items'] as List<dynamic>? ?? const []).map(
@@ -575,13 +651,15 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
       final state = await widget.workspace.getState();
       setState(() {
         tiers = state.tiers
-            .map((tier) => Tier(
-                  slug: tier.slug,
-                  label: tier.label,
-                  index: tier.index,
-                  shared: true,
-                  files: tier.files,
-                ))
+            .map(
+              (tier) => Tier(
+                slug: tier.slug,
+                label: tier.label,
+                index: tier.index,
+                shared: true,
+                files: tier.files,
+              ),
+            )
             .toList();
         final activeShared = state.active['shared'];
         if (activeShared != null && activeShared.isNotEmpty) {
@@ -637,9 +715,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _restartTui() async {
-    setState(
-      () => restartTuiLog = '工作目录配置已更新。请在终端重新运行 opencode 使其生效。',
-    );
+    setState(() => restartTuiLog = '工作目录配置已更新。请在终端重新运行 opencode 使其生效。');
   }
 
   Future<void> _syncCloudToWorkspace() async {
@@ -677,33 +753,74 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
     for (final key in keys) {
       final meta = byKey[key];
       final contentB64 = await widget.workspace.readBundleB64(key);
-      items.add(ConfigItem(
-        key: key,
-        contentB64: contentB64,
-        sha256: meta?.sha256,
-        size: meta?.size,
-        files: meta?.files ?? const [],
-      ));
+      items.add(
+        ConfigItem(
+          key: key,
+          contentB64: contentB64,
+          sha256: meta?.sha256,
+          size: meta?.size,
+          files: meta?.files ?? const [],
+        ),
+      );
     }
     final result = await widget.api.pushConfig(
       serverUrl,
       items,
       'workspace push',
     );
-    _notice(result['ok'] == false
-        ? '同步到云端仓库失败: ${_messageFor(result)}'
-        : '已同步到云端仓库: ${result['snapshotId']}');
+    _notice(
+      result['ok'] == false
+          ? '同步到云端仓库失败: ${_messageFor(result)}'
+          : '已同步到云端仓库: ${result['snapshotId']}',
+    );
     await _refreshAll();
+  }
+
+  Future<void> _deleteWorkspaceItems() async {
+    final keys = _defaultKeys(selectedWorkspace, workspaceItems);
+    if (keys.isEmpty) return _notice('常用配置没有可删除的配置项');
+    final confirmed = await _confirm(
+      '删除常用配置',
+      '将从工作目录删除 ${keys.length} 个档位包。\n${keys.join('\n')}',
+    );
+    if (!confirmed) return;
+    final deleted = await widget.workspace.deleteBundles(keys);
+    setState(() {
+      selectedWorkspace.removeAll(keys);
+      localLog = '已从常用配置删除 ${deleted.length} 项';
+    });
+    _notice('已从常用配置删除 ${deleted.length} 项');
+    await _refreshAll();
+  }
+
+  Future<void> _renameWorkspaceItem() async {
+    final key = _singleSelectedKey(selectedWorkspace, workspaceItems);
+    if (key == null) return _notice('请选择 1 个常用配置进行重命名');
+    final newKey = await _promptRename(key);
+    if (newKey == null) return;
+    try {
+      await widget.workspace.renameBundle(key, newKey);
+      setState(() {
+        selectedWorkspace
+          ..remove(key)
+          ..add(newKey);
+      });
+      _notice('已重命名常用配置: $key → $newKey');
+      await _refreshAll();
+    } catch (error) {
+      _notice('重命名失败: $error');
+    }
   }
 
   Future<void> _downloadWorkspaceToLocal() async {
     final keys = _defaultKeys(selectedWorkspace, workspaceItems);
     if (keys.isEmpty) return _notice('工作目录没有可下载的配置项');
     final byKey = {for (final item in workspaceItems) item.key: item};
+    final items = <ConfigItem>[];
     for (final key in keys) {
       final meta = byKey[key];
       final contentB64 = await widget.workspace.readBundleB64(key);
-      await widget.store.upsertItem(
+      items.add(
         ConfigItem(
           key: key,
           label: meta?.label,
@@ -714,9 +831,9 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
           tierIndex: meta?.tierIndex,
           files: meta?.files ?? const [],
         ),
-        'local-scan',
       );
     }
+    await widget.store.upsertItems(items, 'local-scan');
     setState(() => localLog = '已同步 ${keys.length} 项到本地仓库');
     await Future.wait([_reloadSync(), _reloadHistory()]);
   }
@@ -754,14 +871,16 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   Future<void> _pullRemoteToLocal() async {
     final keys = _defaultKeys(selectedRemote, remoteItems);
     if (keys.isEmpty) return _notice('云端仓库没有可同步的配置项');
+    final items = <ConfigItem>[];
     for (final key in keys) {
       final result = await widget.api.configItem(
         serverUrl,
         key,
         snapshot: selectedSnapshot.isEmpty ? null : selectedSnapshot,
       );
-      await widget.store.upsertItem(ConfigItem.fromJson(result), 'pulled');
+      items.add(ConfigItem.fromJson(result));
     }
+    await widget.store.upsertItems(items, 'pulled');
     setState(() => localLog = '已从云端仓库同步 ${keys.length} 项到本地仓库');
     await Future.wait([_reloadSync(), _reloadHistory()]);
   }
@@ -793,6 +912,41 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
     await _refreshAll();
   }
 
+  Future<void> _deleteLocalItems() async {
+    final keys = _defaultKeys(selectedLocal, localItems);
+    if (keys.isEmpty) return _notice('本地仓库没有可删除的配置项');
+    final confirmed = await _confirm(
+      '删除本地仓库配置',
+      '将从本地仓库删除 ${keys.length} 个档位包，并保留一条本地历史。\n${keys.join('\n')}',
+    );
+    if (!confirmed) return;
+    await widget.store.deleteItems(keys, 'delete local');
+    setState(() {
+      selectedLocal.removeAll(keys);
+      localLog = '已从本地仓库删除 ${keys.length} 项';
+    });
+    await Future.wait([_reloadSync(), _reloadHistory()]);
+  }
+
+  Future<void> _renameLocalItem() async {
+    final key = _singleSelectedKey(selectedLocal, localItems);
+    if (key == null) return _notice('请选择 1 个本地仓库配置进行重命名');
+    final newKey = await _promptRename(key);
+    if (newKey == null) return;
+    try {
+      await widget.store.renameItem(key, newKey, 'rename local');
+      setState(() {
+        selectedLocal
+          ..remove(key)
+          ..add(newKey);
+        localLog = '已重命名本地仓库: $key → $newKey';
+      });
+      await Future.wait([_reloadSync(), _reloadHistory()]);
+    } catch (error) {
+      _notice('重命名失败: $error');
+    }
+  }
+
   Future<void> _restoreLocalHistoryToLocal() async {
     if (selectedLocalHistory.isEmpty || localHistoryItems.isEmpty) {
       return _notice('本地历史没有可同步的配置项');
@@ -822,6 +976,52 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
           ? '同步失败: ${_messageFor(result)}'
           : '已从云端历史覆盖云端仓库: ${result['snapshotId']}',
     );
+    await _refreshAll();
+  }
+
+  Future<void> _deleteRemoteItems() async {
+    final keys = _defaultKeys(selectedRemote, remoteItems);
+    if (keys.isEmpty) return _notice('云端仓库没有可删除的配置项');
+    final confirmed = await _confirm(
+      '删除云端仓库配置',
+      '将在云端仓库生成新快照，删除 ${keys.length} 个档位包。\n${keys.join('\n')}',
+    );
+    if (!confirmed) return;
+    final result = await widget.api.deleteRemoteItems(
+      serverUrl,
+      keys,
+      'delete remote',
+    );
+    setState(() {
+      selectedRemote.removeAll(keys);
+      remoteLog = result['ok'] == false
+          ? '删除失败: ${_messageFor(result)}'
+          : '已从云端仓库删除 ${keys.length} 项: ${result['snapshotId']}';
+    });
+    await _refreshAll();
+  }
+
+  Future<void> _renameRemoteItem() async {
+    final key = _singleSelectedKey(selectedRemote, remoteItems);
+    if (key == null) return _notice('请选择 1 个云端仓库配置进行重命名');
+    final newKey = await _promptRename(key);
+    if (newKey == null) return;
+    final result = await widget.api.renameRemoteItem(
+      serverUrl,
+      key,
+      newKey,
+      'rename remote',
+    );
+    setState(() {
+      if (result['ok'] == false) {
+        remoteLog = '重命名失败: ${_messageFor(result)}';
+      } else {
+        selectedRemote
+          ..remove(key)
+          ..add(newKey);
+        remoteLog = '已重命名云端仓库: $key → $newKey (${result['snapshotId']})';
+      }
+    });
     await _refreshAll();
   }
 
@@ -935,6 +1135,41 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         false;
   }
 
+  Future<String?> _promptRename(String oldKey) async {
+    final controller = TextEditingController(text: oldKey);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('重命名'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '新名称',
+            helperText: '允许字母、数字、下划线、点、连字符，且需以字母或数字开头',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('确认重命名'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result == null || result == oldKey) return null;
+    if (!_isSafeConfigKey(result)) {
+      _notice('名称不合法: $result');
+      return null;
+    }
+    return result;
+  }
+
   void _notice(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(
@@ -977,6 +1212,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         ),
         onSyncToLocal: _downloadWorkspaceToLocal,
         onSyncToRemote: _pushWorkspaceToRemote,
+        onRename: _renameWorkspaceItem,
+        onDelete: _deleteWorkspaceItems,
       ),
       _LocalPage(
         path: localPath,
@@ -989,6 +1226,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         ),
         onUploadWorkspace: _uploadLocalToWorkspace,
         onPushRemote: _pushLocalToRemote,
+        onRename: _renameLocalItem,
+        onDelete: _deleteLocalItems,
       ),
       _LocalHistoryPage(
         snapshots: localHistory,
@@ -1013,11 +1252,14 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         items: remoteItems,
         presence: presence,
         selected: selectedRemote,
+        log: remoteLog,
         onSelectedChanged: (key, checked) => setState(
           () => checked ? selectedRemote.add(key) : selectedRemote.remove(key),
         ),
         onSyncToWorkspace: _syncCloudToWorkspace,
         onSyncToLocal: _pullRemoteToLocal,
+        onRename: _renameRemoteItem,
+        onDelete: _deleteRemoteItems,
       ),
       _RemoteHistoryPage(
         snapshots: remoteHistory,
@@ -1181,6 +1423,8 @@ class _WorkspaceSyncPage extends StatelessWidget {
     required this.onSelectedChanged,
     required this.onSyncToLocal,
     required this.onSyncToRemote,
+    required this.onRename,
+    required this.onDelete,
   });
 
   final String path;
@@ -1190,6 +1434,8 @@ class _WorkspaceSyncPage extends StatelessWidget {
   final void Function(String key, bool checked) onSelectedChanged;
   final VoidCallback onSyncToLocal;
   final VoidCallback onSyncToRemote;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1210,6 +1456,16 @@ class _WorkspaceSyncPage extends StatelessWidget {
             OutlinedButton(
               onPressed: onSyncToRemote,
               child: const Text('同步到云端仓库'),
+            ),
+            OutlinedButton.icon(
+              onPressed: onRename,
+              icon: const Icon(Icons.drive_file_rename_outline, size: 16),
+              label: const Text('重命名'),
+            ),
+            OutlinedButton.icon(
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline, size: 16),
+              label: const Text('删除'),
             ),
           ],
         ),
@@ -1234,6 +1490,8 @@ class _LocalPage extends StatelessWidget {
     required this.onSelectedChanged,
     required this.onUploadWorkspace,
     required this.onPushRemote,
+    required this.onRename,
+    required this.onDelete,
   });
 
   final String path;
@@ -1244,6 +1502,8 @@ class _LocalPage extends StatelessWidget {
   final void Function(String key, bool checked) onSelectedChanged;
   final VoidCallback onUploadWorkspace;
   final VoidCallback onPushRemote;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1264,6 +1524,16 @@ class _LocalPage extends StatelessWidget {
             OutlinedButton(
               onPressed: onPushRemote,
               child: const Text('同步到云端仓库'),
+            ),
+            OutlinedButton.icon(
+              onPressed: onRename,
+              icon: const Icon(Icons.drive_file_rename_outline, size: 16),
+              label: const Text('重命名'),
+            ),
+            OutlinedButton.icon(
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline, size: 16),
+              label: const Text('删除'),
             ),
           ],
         ),
@@ -1354,9 +1624,12 @@ class _RemotePage extends StatelessWidget {
     required this.items,
     required this.presence,
     required this.selected,
+    required this.log,
     required this.onSelectedChanged,
     required this.onSyncToWorkspace,
     required this.onSyncToLocal,
+    required this.onRename,
+    required this.onDelete,
   });
 
   final String serverUrl;
@@ -1366,9 +1639,12 @@ class _RemotePage extends StatelessWidget {
   final List<ConfigItem> items;
   final Presence presence;
   final Set<String> selected;
+  final String log;
   final void Function(String key, bool checked) onSelectedChanged;
   final VoidCallback onSyncToWorkspace;
   final VoidCallback onSyncToLocal;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1420,6 +1696,16 @@ class _RemotePage extends StatelessWidget {
               onPressed: onSyncToLocal,
               child: const Text('同步到本地仓库'),
             ),
+            OutlinedButton.icon(
+              onPressed: onRename,
+              icon: const Icon(Icons.drive_file_rename_outline, size: 16),
+              label: const Text('重命名'),
+            ),
+            OutlinedButton.icon(
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline, size: 16),
+              label: const Text('删除'),
+            ),
           ],
         ),
         _ConfigList(
@@ -1428,6 +1714,7 @@ class _RemotePage extends StatelessWidget {
           selected: selected,
           onSelectedChanged: onSelectedChanged,
         ),
+        _LogBox(text: log),
       ],
     );
   }
@@ -1830,6 +2117,19 @@ class ConfigItem {
     files: files,
   );
 
+  ConfigItem renamed(String newKey) => ConfigItem(
+    key: newKey,
+    label: label == key ? newKey : label,
+    sha256: sha256,
+    contentB64: contentB64,
+    provider: provider,
+    tierSlug: tierSlug == null || tierSlug == key ? newKey : tierSlug,
+    tierIndex: tierIndex,
+    size: size,
+    source: source,
+    files: files,
+  );
+
   factory ConfigItem.fromJson(Map<String, dynamic> json) => ConfigItem(
     key: json['key'] as String? ?? '',
     label: json['label'] as String?,
@@ -1906,6 +2206,17 @@ List<String> _defaultKeys(Set<String> selected, List<ConfigItem> items) =>
     selected.isNotEmpty
     ? selected.toList()
     : items.map((item) => item.key).toList();
+String? _singleSelectedKey(Set<String> selected, List<ConfigItem> items) {
+  final keys = selected.isNotEmpty
+      ? selected.toList()
+      : items.length == 1
+      ? [items.first.key]
+      : <String>[];
+  return keys.length == 1 ? keys.first : null;
+}
+
+bool _isSafeConfigKey(String key) =>
+    RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$').hasMatch(key);
 String shortSha(String? value) => value == null || value.isEmpty
     ? '—'
     : value.substring(0, value.length < 8 ? value.length : 8);

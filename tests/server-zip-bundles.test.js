@@ -46,6 +46,26 @@ test('listTierBundles scans zip packages from the workspace directory', async ()
   assert.match(bundles[0].sha256, /^[a-f0-9]{64}$/);
 });
 
+test('bundle names allow practical safe slugs and still reject path-like names', async () => {
+  const dir = tempDir();
+  await setOpencodeDir(dir);
+  await makeBundle(dir, 'Opus_Mode.v2', {
+    'oh-my-openagent.json': '{"provider":"omo"}',
+    'oh-my-opencode-slim.json': '{"provider":"slim"}',
+  });
+  await makeBundle(dir, '.hidden', {
+    'oh-my-openagent.json': '{"provider":"hidden"}',
+  });
+
+  const { listTierBundles, isAllowedSlug } = await importFresh('../server/src/bundle.js');
+  const bundles = await listTierBundles();
+
+  assert.deepEqual(bundles.map((bundle) => bundle.key), ['Opus_Mode.v2']);
+  assert.equal(isAllowedSlug('Opus_Mode.v2'), true);
+  assert.equal(isAllowedSlug('../escape'), false);
+  assert.equal(isAllowedSlug('.hidden'), false);
+});
+
 test('buildTierBundle augments incomplete workspace packages from active provider files', async () => {
   const dir = tempDir();
   await setOpencodeDir(dir);

@@ -182,7 +182,7 @@
 - Q3 客户端本地缓存采用 Flutter 文件存储；如后续需要结构化查询，可再引入 SQLite 插件。
 - Q4 是否需要鉴权（token）？**[假设]** 暂不做，预留 `Authorization` 头透传位。
 - Q5 “双向同步”冲突如何处理（本地与远端都改过）？**[假设]** 不做自动三路合并；同步是“覆盖式”，由用户勾选方向与文件，确认页展示差异，用户自担覆盖。
-- Q6 删除语义：远端有、本地无的项，pull 时是否在本地创建？push 时本地无的项是否删远端？**[假设]** 同步=并集对齐到所选方向源；不做删除（删除需显式操作，暂不实现）。
+- Q6 删除语义：远端有、本地无的项，pull 时是否在本地创建？push 时本地无的项是否删远端？**[已实现]** 同步仍按所选方向写入；删除必须显式操作。常用配置删除 zip，本地仓库删除缓存项，云端仓库以“删除后的剩余集合”生成新快照。
 
 ---
 
@@ -194,6 +194,8 @@
 - [x] 服务端 `restart.js`（杀进程 + osascript 新终端）
 - [x] 服务端 `versions.js`（Redis 快照版本库、整体/单文件回滚）— curl 验证 head 移动与回滚还原
 - [x] 服务端 `sync.js`（配置项扫描 + diff + key 白名单）
+- [x] 常用配置 / 本地仓库 / 云端仓库显式删除
+- [x] Windows/macOS 客户端安装器脚本
 - [x] 服务端 `index.js`（全部 Express 路由）— health/state/switch/snapshots 已实测
 - [x] 客户端 Flutter：`client/lib/main.dart` + `client/test/widget_test.dart`（`flutter test` 通过）
 - [ ] 客户端 GUI 实跑（需本机 `flutter run -d macos`）

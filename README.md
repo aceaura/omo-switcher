@@ -1,5 +1,7 @@
 # omo-switcher
 
+![omo-switcher logo](client/assets/brand/omo_switcher_logo.png)
+
 为本机 [opencode](https://opencode.ai) 在 **omo**（`oh-my-openagent`）与 **omo-slim**（`oh-my-opencode-slim`）
 两个插件之间，按统一的「性能/消耗档位」一键切换配置文件，并一键重启 opencode。
 另含**本地 ↔ 远端的带版本历史的配置同步**。
@@ -10,6 +12,7 @@
 - **档位切换**：下拉框选 1 个性能版本（省钱 / 可预测成本 / 均衡 / 质量优先），同时应用到 omo 与 omo-slim。按字节整文件复制，保留 BOM/格式；失败自动回滚。
 - **重启 opencode**：杀掉运行中的 opencode 进程，新开 macOS 终端窗口重新启动。
 - **同步**：本地 SQLite ↔ 远端服务器，双向、可全量/单项、勾选 + 确认；当前档位与服务器地址等本机私有设置**永不被同步覆盖**。
+- **删除**：常用配置、本地仓库、云端仓库均可删除勾选档位；云端删除通过新快照表达，不破坏历史版本。
 - **版本历史**：服务端按时间戳保留全部快照，可浏览、整体回滚、单文件回滚；本地可从任意历史版本拉取。
 - 服务器同步地址可在界面编辑。
 
@@ -29,6 +32,17 @@ npm run server               # 默认 http://0.0.0.0:7600
 npm run client
 ```
 可选启用持久化版本库：`brew install redis && brew services start redis`。
+
+### 安装器
+```bash
+# Windows: 生成图形界面的 release/installer/omo-switcher-windows-setup.msi
+# 需要 .NET SDK；脚本会在 .tools/ 下安装 WiX Toolset。
+npm run installer:windows
+
+# macOS: 生成 release/installer/omo-switcher-macos.pkg
+# 使用 Xcode Command Line Tools 的 pkgbuild；安装目录为 /Applications。
+npm run installer:macos
+```
 
 ### Docker（服务端 + Redis）
 ```bash
@@ -54,12 +68,13 @@ curl http://127.0.0.1:7600/api/health
 ## API 摘要
 `GET /api/health` · `GET /api/state` · `POST /api/switch {tier}` · `POST /api/restart {cwd?}`
 · `GET /api/config/items` · `GET /api/config/item/:key?snapshot=` · `POST /api/config/push`
+· `DELETE /api/config/items`
 · `GET /api/snapshots` · `POST /api/snapshots/:id/rollback` · `POST /api/snapshots/:id/rollback-file`
 完整说明见 `doc/design.md §4`。
 
 ## 安全
-- 服务端只操作白名单文件（`<prefix>.json` 与 8 个 `<prefix>.<index>-<slug>.json` 档位文件），禁止越界写入。
+- 档位包 key 允许大小写字母、数字、下划线、点、连字符，且必须以字母/数字开头；服务端仍拒绝路径分隔符和越界写入。
 - **不读取、不同步**含凭据的 `opencode.jsonc` / `auth.json`；仓库不包含任何密钥。
 
 ## 平台
-首要支持 macOS（重启依赖 osascript）。重启模块按平台抽象，其它平台待实现。
+客户端支持 Windows 与 macOS 安装器；重启模块首要支持 macOS（依赖 osascript）。
