@@ -254,6 +254,45 @@ class HttpOmoApi implements OmoApi {
   }
 }
 
+Directory defaultLocalStoreDirectory({
+  Map<String, String>? environment,
+  String? operatingSystem,
+  String? currentPath,
+  String? pathSeparator,
+}) {
+  final env = environment ?? Platform.environment;
+  final os = operatingSystem ?? Platform.operatingSystem;
+  final cwd = currentPath ?? Directory.current.path;
+  final separator = pathSeparator ?? (os == 'windows' ? r'\' : '/');
+
+  String childOf(String base, String name) => '$base$separator$name';
+
+  if (os == 'windows') {
+    final localAppData = env['LOCALAPPDATA'];
+    if (localAppData != null && localAppData.isNotEmpty) {
+      return Directory(childOf(localAppData, 'omo-switcher-client'));
+    }
+    final appData = env['APPDATA'];
+    if (appData != null && appData.isNotEmpty) {
+      return Directory(childOf(appData, 'omo-switcher-client'));
+    }
+  }
+
+  if (os == 'macos') {
+    final home = env['HOME'] ?? cwd;
+    return Directory('$home/Library/Application Support/omo-switcher-client');
+  }
+
+  final home = env['HOME'];
+  if (home != null && home.isNotEmpty) {
+    return Directory(
+      childOf(childOf(childOf(home, '.local'), 'share'), 'omo-switcher-client'),
+    );
+  }
+
+  return Directory(childOf(cwd, 'omo-switcher-client'));
+}
+
 class FileLocalStore implements LocalStore {
   FileLocalStore({Directory? directory})
     : _directory = directory ?? _defaultDirectory();
@@ -364,8 +403,7 @@ class FileLocalStore implements LocalStore {
   }
 
   static Directory _defaultDirectory() {
-    final home = Platform.environment['HOME'] ?? Directory.current.path;
-    return Directory('$home/Library/Application Support/omo-switcher-client');
+    return defaultLocalStoreDirectory();
   }
 }
 
