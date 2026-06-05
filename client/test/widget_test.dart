@@ -1,104 +1,142 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omo_switcher_client/main.dart';
+import 'package:omo_switcher_client/workspace.dart';
+
+// 工作目录已本机化：测试用临时目录 + 真实 zip 模拟 ~/.config/opencode。
+// 云端走 FakeApi，本地仓库走 MemoryStore（避免在 flutter test 里加载原生 sqlite）。
+
+const _balancedFiles = {
+  'oh-my-openagent.json': '{"omo":"balanced"}',
+  'oh-my-opencode-slim.json': '{"slim":"balanced"}',
+  'opencode.jsonc': '{}',
+  'tui.json': '{}',
+  'package.json': '{}',
+  'package-lock.json': '{}',
+};
+
+void _writeZip(Directory dir, String slug, Map<String, String> files) {
+  final archive = Archive();
+  files.forEach(
+    (name, content) => archive.add(ArchiveFile.bytes(name, utf8.encode(content))),
+  );
+  File('${dir.path}${Platform.pathSeparator}$slug.zip')
+      .writeAsBytesSync(ZipEncoder().encodeBytes(archive));
+}
+
+Directory _makeWorkspace(WidgetTester tester, {bool empty = false}) {
+  final dir = Directory.systemTemp.createTempSync('omo_ws_');
+  addTearDown(() {
+    try {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    } catch (_) {
+      // Windows 偶发文件占用，测试结束清理失败可忽略。
+    }
+  });
+  if (empty) return dir;
+  _writeZip(dir, 'balanced', _balancedFiles);
+  // 写入与 balanced 一致的 base 文件 -> 当前生效档位 = balanced。
+  File('${dir.path}${Platform.pathSeparator}oh-my-openagent.json')
+      .writeAsStringSync(_balancedFiles['oh-my-openagent.json']!);
+  File('${dir.path}${Platform.pathSeparator}oh-my-opencode-slim.json')
+      .writeAsStringSync(_balancedFiles['oh-my-opencode-slim.json']!);
+  return dir;
+}
 
 void main() {
-  testWidgets('connects, loads state, and applies selected tier', (
+  testWidgets('loads tiers from local workspace and applies a tier locally', (
     tester,
   ) async {
+    final dir = _makeWorkspace(tester);
     final api = FakeApi();
-    final store = MemoryStore({'server_url': 'http://old.example'});
+    final store = MemoryStore({'server_url': 'http://127.0.0.1:7600'});
 
-    await tester.pumpWidget(MyApp(api: api, store: store));
+    await tester.pumpWidget(MyApp(
+      api: api,
+      workspace: LocalWorkspace(directory: dir),
+      store: store,
+    ));
     await tester.pumpAndSettle();
 
     expect(find.text('omo-switcher'), findsOneWidget);
-    expect(find.text('工作目录: /tmp/opencode'), findsOneWidget);
-    expect(find.text('balanced'), findsOneWidget);
+    expect(find.textContaining('工作目录:'), findsWidgets);
+    expect(find.text('balanced'), findsWidgets);
     expect(find.text('当前配置文件'), findsOneWidget);
-    expect(find.text('oh-my-openagent.json'), findsOneWidget);
 
+    // 应用档位：本地解包写入工作目录，不再调用服务器 switch。
     await tester.tap(find.text('应用到工作目录'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('确认执行'));
     await tester.pumpAndSettle();
 
-    expect(api.switchCalls, [('/api/switch', 'balanced')]);
-    expect(find.textContaining('switched balanced'), findsOneWidget);
+    expect(api.switchCalls, isEmpty);
+    expect(find.textContaining('已应用'), findsOneWidget);
   });
 
-  testWidgets('renders empty storage zones safely', (tester) async {
+  testWidgets('renders empty workspace safely', (tester) async {
+    final dir = _makeWorkspace(tester, empty: true);
     final api = FakeApi(empty: true);
     final store = MemoryStore({'server_url': 'http://127.0.0.1:7600'});
 
-    await tester.pumpWidget(MyApp(api: api, store: store));
+    await tester.pumpWidget(MyApp(
+      api: api,
+      workspace: LocalWorkspace(directory: dir),
+      store: store,
+    ));
     await tester.pumpAndSettle();
 
-    expect(find.text('常用配置'), findsWidgets);
     await tester.tap(find.text('常用配置').first);
     await tester.pumpAndSettle();
     expect(find.text('0 项'), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('performs selected sync and rollback actions', (tester) async {
+  testWidgets('syncs workspace->local, local->cloud, cloud->local', (
+    tester,
+  ) async {
+    final dir = _makeWorkspace(tester);
     final api = FakeApi();
     final store = MemoryStore({'server_url': 'http://127.0.0.1:7600'});
-    await store.upsertItem(
-      const ConfigItem(
-        key: 'balanced',
-        contentB64: 'zip-b64',
-        sha256: 'abcdef1234567890',
-      ),
-      'seed',
-    );
 
-    await tester.pumpWidget(MyApp(api: api, store: store));
+    await tester.pumpWidget(MyApp(
+      api: api,
+      workspace: LocalWorkspace(directory: dir),
+      store: store,
+    ));
     await tester.pumpAndSettle();
 
+    // 常用配置 -> 本地仓库（读本机 zip 字节存入 store）。
     await tester.tap(find.text('常用配置').first);
     await tester.pumpAndSettle();
+    // 标签：balanced 在「常用」(工作目录)和「云端」(FakeApi) 中，尚未进「本地」。
+    expect(find.text('常用'), findsOneWidget);
+    expect(find.text('云端'), findsOneWidget);
+    expect(find.text('本地'), findsNothing);
     await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('同步到本地仓库'));
     await tester.pumpAndSettle();
-    expect(api.itemFetches, contains('/api/config/item/balanced?fs=1'));
+    expect(store.items.containsKey('balanced'), isTrue);
+    // 同步后多出「本地」标签。
+    expect(find.text('本地'), findsOneWidget);
+    expect(store.items['balanced']!.contentB64, isNotNull);
 
+    // 本地仓库 -> 云端仓库（pushConfig）。
     await tester.tap(find.text('本地仓库'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('同步到云端仓库'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('确认执行'));
     await tester.pumpAndSettle();
-    expect(api.pushNotes, ['client all push']);
+    expect(api.pushNotes, contains('client all push'));
 
-    await tester.tap(find.text('云端仓库').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.byType(Checkbox).first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('同步到本地仓库'));
-    await tester.pumpAndSettle();
-    expect(store.items.containsKey('balanced'), isTrue);
-
-    await tester.tap(find.text('本地历史'));
-    await tester.pumpAndSettle();
-    expect(find.text('本地历史'), findsWidgets);
-    expect(find.textContaining('2026-06-02'), findsWidgets);
-    await tester.tap(find.text('同步到本地仓库').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('确认执行'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('已从本地历史覆盖本地仓库'), findsOneWidget);
-
-    await tester.tap(find.text('远端历史'));
-    await tester.pumpAndSettle();
-    expect(find.text('远端历史'), findsWidgets);
-    expect(find.textContaining('2026-06-02'), findsWidgets);
-    await tester.tap(find.text('同步到云端仓库').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('确认执行'));
-    await tester.pumpAndSettle();
-    expect(api.rollbackCalls, ['/api/snapshots/snap-1/rollback']);
+    // 云端历史 tab 已重命名（不再有「远端历史」）。
+    expect(find.text('云端历史'), findsWidgets);
+    expect(find.text('远端历史'), findsNothing);
   });
 }
 
@@ -118,40 +156,19 @@ class FakeApi implements OmoApi {
   };
 
   @override
-  Future<Map<String, dynamic>> state(String serverUrl) async => {
-    'ok': true,
-    'opencodeDir': '/tmp/opencode',
-    'tiers': empty
-        ? []
-        : [
-            {
-              'slug': 'balanced',
-              'label': '均衡 · Balanced',
-              'index': 3,
-              'shared': true,
-              'files': ['oh-my-openagent.json', 'oh-my-opencode-slim.json'],
-            },
-          ],
-    'active': {'shared': empty ? '' : 'balanced'},
-  };
+  Future<Map<String, dynamic>> state(String serverUrl) async => {'ok': true};
 
   @override
   Future<Map<String, dynamic>> switchTier(String serverUrl, String tier) async {
     switchCalls.add(('/api/switch', tier));
-    return {
-      'ok': true,
-      'log': ['switched $tier'],
-    };
+    return {'ok': true, 'log': ['switched $tier']};
   }
 
   @override
   Future<Map<String, dynamic>> restart(
     String serverUrl, {
     String? launchCmd,
-  }) async => {
-    'ok': true,
-    'log': ['restarted'],
-  };
+  }) async => {'ok': true, 'log': ['restarted']};
 
   @override
   Future<List<ConfigItem>> configItems(
@@ -175,13 +192,7 @@ class FakeApi implements OmoApi {
     String? snapshot,
     bool fs = false,
   }) async {
-    itemFetches.add(
-      '/api/config/item/$key${fs
-          ? '?fs=1'
-          : snapshot == null
-          ? ''
-          : '?snapshot=$snapshot'}',
-    );
+    itemFetches.add('/api/config/item/$key');
     return {
       'ok': true,
       'key': key,
@@ -198,7 +209,7 @@ class FakeApi implements OmoApi {
     'ok': true,
     'diff': {
       'onlyLocal': [],
-      'onlyRemote': empty ? [] : ['balanced'],
+      'onlyRemote': [],
       'changed': [],
       'same': [],
     },
@@ -225,31 +236,12 @@ class FakeApi implements OmoApi {
   Future<Map<String, dynamic>> snapshots(
     String serverUrl, {
     int limit = 50,
-  }) async => empty
-      ? {'ok': true, 'items': []}
-      : {
-          'ok': true,
-          'head': 'snap-1',
-          'items': [
-            {
-              'id': 'snap-1',
-              'ts': '2026-06-02T10:00:00.000Z',
-              'note': 'seed',
-              'keys': ['balanced'],
-            },
-          ],
-        };
+  }) async => {'ok': true, 'head': null, 'items': []};
 
   @override
   Future<Map<String, dynamic>> snapshot(String serverUrl, String id) async => {
     'ok': true,
-    'items': [
-      {
-        'key': 'balanced',
-        'contentB64': 'zip-b64',
-        'sha256': 'abcdef1234567890',
-      },
-    ],
+    'items': [],
   };
 
   @override

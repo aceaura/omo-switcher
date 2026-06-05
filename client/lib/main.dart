@@ -4,14 +4,27 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'package:omo_switcher_client/local_store.dart';
+import 'package:omo_switcher_client/workspace.dart';
+
 void main() {
-  runApp(MyApp(api: HttpOmoApi(), store: FileLocalStore()));
+  runApp(MyApp(
+    api: HttpOmoApi(),
+    workspace: LocalWorkspace(),
+    store: SqliteLocalStore(),
+  ));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key, required this.api, required this.store});
+  const MyApp({
+    super.key,
+    required this.api,
+    required this.workspace,
+    required this.store,
+  });
 
   final OmoApi api;
+  final LocalWorkspace workspace;
   final LocalStore store;
 
   @override
@@ -51,7 +64,7 @@ class MyApp extends StatelessWidget {
           bodySmall: TextStyle(fontSize: 11),
         ),
       ),
-      home: OmoSwitcherHome(api: api, store: store),
+      home: OmoSwitcherHome(api: api, workspace: workspace, store: store),
     );
   }
 }
@@ -408,9 +421,15 @@ class FileLocalStore implements LocalStore {
 }
 
 class OmoSwitcherHome extends StatefulWidget {
-  const OmoSwitcherHome({super.key, required this.api, required this.store});
+  const OmoSwitcherHome({
+    super.key,
+    required this.api,
+    required this.workspace,
+    required this.store,
+  });
 
   final OmoApi api;
+  final LocalWorkspace workspace;
   final LocalStore store;
 
   @override
@@ -440,8 +459,6 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   List<ConfigItem> remoteHistoryItems = [];
   List<HistoryEntry> localHistory = [];
   List<HistoryEntry> remoteHistory = [];
-  DiffResult diff = const DiffResult();
-  DiffResult workspaceDiff = const DiffResult();
   final selectedWorkspace = <String>{};
   final selectedLocal = <String>{};
   final selectedRemote = <String>{};
@@ -462,8 +479,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   Future<void> _boot() async {
     serverUrl = await widget.store.getSetting('server_url') ?? serverUrl;
     serverUrlController.text = serverUrl;
-    if (widget.store is FileLocalStore) {
-      localPath = (widget.store as FileLocalStore).directoryPath;
+    if (widget.store is SqliteLocalStore) {
+      localPath = '本地仓库: ${(widget.store as SqliteLocalStore).directoryPath}';
     }
     if (mounted) setState(() {});
     // 自动连接已缓存的地址
@@ -555,82 +572,73 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
 
   Future<void> _refreshState() async {
     try {
-      final result = await widget.api.state(serverUrl);
-      if (result['ok'] == false) return;
-      final nextTiers = (result['tiers'] as List<dynamic>? ?? [])
-          .map((item) => Tier.fromJson(item as Map<String, dynamic>))
-          .where((tier) => tier.shared)
-          .toList();
+      final state = await widget.workspace.getState();
       setState(() {
-        tiers = nextTiers;
-        selectedTier = result['active'] is Map<String, dynamic>
-            ? ((result['active'] as Map<String, dynamic>)['shared']
-                      as String? ??
-                  selectedTier)
-            : selectedTier;
+        tiers = state.tiers
+            .map((tier) => Tier(
+                  slug: tier.slug,
+                  label: tier.label,
+                  index: tier.index,
+                  shared: true,
+                  files: tier.files,
+                ))
+            .toList();
+        final activeShared = state.active['shared'];
+        if (activeShared != null && activeShared.isNotEmpty) {
+          selectedTier = activeShared;
+        }
         if (selectedTier.isEmpty && tiers.isNotEmpty) {
           selectedTier = tiers.first.slug;
         }
-        workspacePath = '工作目录: ${result['opencodeDir'] ?? '?'}';
+        workspacePath = '工作目录: ${state.opencodeDir}';
       });
     } catch (_) {}
   }
 
   Future<void> _reloadSync() async {
+    // 工作目录 = 本机文件系统（不依赖服务器）。
+    final workspace = await widget.workspace.listBundles();
+    final local = await widget.store.listItems();
+    // 云端依赖服务器；离线时清空但不影响工作目录/本地仓库。
+    List<ConfigItem> remote = [];
     try {
-      final workspace = await widget.api.configItems(serverUrl, fs: true);
-      final remote = await widget.api.configItems(serverUrl);
-      final local = await widget.store.listItems();
-      final diffResponse = await widget.api.configDiff(serverUrl, local);
-      setState(() {
-        workspaceItems = workspace;
-        remoteItems = remote;
-        localItems = local;
-        diff = DiffResult.fromJson(
-          diffResponse['diff'] as Map<String, dynamic>? ?? const {},
-        );
-        workspaceDiff = DiffResult.compare(local, workspace);
-      });
+      remote = await widget.api.configItems(serverUrl);
     } catch (_) {
-      setState(() {
-        workspaceItems = [];
-        remoteItems = [];
-        localItems = [];
-      });
+      remote = [];
     }
+    setState(() {
+      workspaceItems = workspace;
+      remoteItems = remote;
+      localItems = local;
+    });
   }
 
   Future<void> _applyTier() async {
     if (selectedTier.isEmpty) return;
     final confirmed = await _confirm(
       '应用档位',
-      '将把 omo 与 omo-slim 同时切换到「$selectedTier」。',
+      '将把「$selectedTier」档位包解包到本机工作目录，覆盖 omo 与 omo-slim 的生效配置。',
     );
     if (!confirmed) return;
-    final result = await widget.api.switchTier(serverUrl, selectedTier);
-    setState(
-      () => switchLog = result['ok'] == false
-          ? '切换失败: ${_messageFor(result)}'
-          : _logText(result),
-    );
+    try {
+      final log = await widget.workspace.applyTier(selectedTier);
+      setState(() => switchLog = '已应用「$selectedTier」:\n${log.join('\n')}');
+    } catch (error) {
+      setState(() => switchLog = '切换失败: $error');
+    }
     await _refreshState();
   }
 
+  // 工作目录已本机化：opencode 在本机运行，重启需手动执行（GUI/进程无法可靠代劳）。
   Future<void> _restartDesktop() async {
-    final result = await widget.api.restart(serverUrl);
     setState(
-      () => restartDesktopLog = result['ok'] == false
-          ? '重启失败: ${_messageFor(result)}'
-          : _logText(result),
+      () => restartDesktopLog = '工作目录配置已更新。请手动重启 opencode Desktop 使其生效。',
     );
   }
 
   Future<void> _restartTui() async {
-    final result = await widget.api.restart(serverUrl, launchCmd: 'opencode');
     setState(
-      () => restartTuiLog = result['ok'] == false
-          ? '重启失败: ${_messageFor(result)}'
-          : _logText(result),
+      () => restartTuiLog = '工作目录配置已更新。请在终端重新运行 opencode 使其生效。',
     );
   }
 
@@ -649,11 +657,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         snapshot: selectedSnapshot.isEmpty ? null : selectedSnapshot,
       );
       if (result['contentB64'] != null) {
-        await widget.api.writeWorkspaceItem(
-          serverUrl,
-          key,
-          result['contentB64'] as String,
-        );
+        await widget.workspace.writeBundle(key, result['contentB64'] as String);
       }
     }
     _notice('已同步 ${keys.length} 项到工作目录');
@@ -668,30 +672,50 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
       '将把工作目录中 ${keys.length} 个档位包上传到云端仓库。\n${keys.join('\n')}',
     );
     if (!confirmed) return;
+    final byKey = {for (final item in workspaceItems) item.key: item};
     final items = <ConfigItem>[];
     for (final key in keys) {
-      final result = await widget.api.configItem(serverUrl, key, fs: true);
-      items.add(ConfigItem.fromJson(result));
+      final meta = byKey[key];
+      final contentB64 = await widget.workspace.readBundleB64(key);
+      items.add(ConfigItem(
+        key: key,
+        contentB64: contentB64,
+        sha256: meta?.sha256,
+        size: meta?.size,
+        files: meta?.files ?? const [],
+      ));
     }
     final result = await widget.api.pushConfig(
       serverUrl,
       items,
       'workspace push',
     );
-    setState(
-      () => restartDesktopLog = result['ok'] == false
-          ? '同步到云端仓库失败: ${_messageFor(result)}'
-          : '已同步到云端仓库: ${result['snapshotId']}',
-    );
+    _notice(result['ok'] == false
+        ? '同步到云端仓库失败: ${_messageFor(result)}'
+        : '已同步到云端仓库: ${result['snapshotId']}');
     await _refreshAll();
   }
 
   Future<void> _downloadWorkspaceToLocal() async {
     final keys = _defaultKeys(selectedWorkspace, workspaceItems);
     if (keys.isEmpty) return _notice('工作目录没有可下载的配置项');
+    final byKey = {for (final item in workspaceItems) item.key: item};
     for (final key in keys) {
-      final result = await widget.api.configItem(serverUrl, key, fs: true);
-      await widget.store.upsertItem(ConfigItem.fromJson(result), 'local-scan');
+      final meta = byKey[key];
+      final contentB64 = await widget.workspace.readBundleB64(key);
+      await widget.store.upsertItem(
+        ConfigItem(
+          key: key,
+          label: meta?.label,
+          sha256: meta?.sha256,
+          size: meta?.size,
+          contentB64: contentB64,
+          tierSlug: meta?.tierSlug,
+          tierIndex: meta?.tierIndex,
+          files: meta?.files ?? const [],
+        ),
+        'local-scan',
+      );
     }
     setState(() => localLog = '已同步 ${keys.length} 项到本地仓库');
     await Future.wait([_reloadSync(), _reloadHistory()]);
@@ -713,13 +737,12 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         failed.add('$key: 本地仓库中不存在');
         continue;
       }
-      final result = await widget.api.writeWorkspaceItem(
-        serverUrl,
-        key,
-        item.contentB64!,
-      );
-      if (result['ok'] == false) failed.add('$key: ${_messageFor(result)}');
-      if (result['ok'] != false) exported++;
+      try {
+        await widget.workspace.writeBundle(key, item.contentB64!);
+        exported++;
+      } catch (error) {
+        failed.add('$key: $error');
+      }
     }
     setState(
       () => localLog =
@@ -786,7 +809,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
 
   Future<void> _restoreRemoteHistoryToRemote() async {
     if (selectedRemoteHistory.isEmpty) {
-      return _notice('远端历史没有可同步的配置项');
+      return _notice('云端历史没有可同步的配置项');
     }
     final confirmed = await _confirm('同步到云端仓库', '将用所选历史覆盖云端仓库最新配置。');
     if (!confirmed) return;
@@ -797,7 +820,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
     setState(
       () => remoteLog = result['ok'] == false
           ? '同步失败: ${_messageFor(result)}'
-          : '已从远端历史覆盖云端仓库: ${result['snapshotId']}',
+          : '已从云端历史覆盖云端仓库: ${result['snapshotId']}',
     );
     await _refreshAll();
   }
@@ -816,7 +839,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         if (candidate.key == key) item = candidate;
       }
       if (item?.contentB64 != null) {
-        await widget.api.writeWorkspaceItem(serverUrl, key, item!.contentB64!);
+        await widget.workspace.writeBundle(key, item!.contentB64!);
       }
     }
     _notice('已从本地历史同步 ${keys.length} 项到工作目录');
@@ -851,11 +874,11 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   Future<void> _syncRemoteHistoryToWorkspace() async {
     final keys = _defaultKeys(selectedRemote, remoteHistoryItems);
     if (selectedRemoteHistory.isEmpty || keys.isEmpty) {
-      return _notice('远端历史没有可同步的配置项');
+      return _notice('云端历史没有可同步的配置项');
     }
     final confirmed = await _confirm(
       '同步到常用配置',
-      '将把所选远端历史中的 ${keys.length} 个档位包同步到工作目录。\n${keys.join('\n')}',
+      '将把所选云端历史中的 ${keys.length} 个档位包同步到工作目录。\n${keys.join('\n')}',
     );
     if (!confirmed) return;
     for (final key in keys) {
@@ -865,21 +888,17 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         snapshot: selectedRemoteHistory,
       );
       if (result['contentB64'] != null) {
-        await widget.api.writeWorkspaceItem(
-          serverUrl,
-          key,
-          result['contentB64'] as String,
-        );
+        await widget.workspace.writeBundle(key, result['contentB64'] as String);
       }
     }
-    _notice('已从远端历史同步 ${keys.length} 项到工作目录');
+    _notice('已从云端历史同步 ${keys.length} 项到工作目录');
     await _refreshAll();
   }
 
   Future<void> _syncRemoteHistoryToLocal() async {
     final keys = _defaultKeys(selectedRemote, remoteHistoryItems);
     if (selectedRemoteHistory.isEmpty || keys.isEmpty) {
-      return _notice('远端历史没有可同步的配置项');
+      return _notice('云端历史没有可同步的配置项');
     }
     final items = <ConfigItem>[];
     for (final key in keys) {
@@ -890,8 +909,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
       );
       items.add(ConfigItem.fromJson(result));
     }
-    await widget.store.replaceItems(items, 'remote-history pull');
-    setState(() => localLog = '已从远端历史同步 ${items.length} 项到本地仓库');
+    await widget.store.replaceItems(items, 'cloud-history pull');
+    setState(() => localLog = '已从云端历史同步 ${items.length} 项到本地仓库');
     await Future.wait([_reloadSync(), _reloadHistory()]);
   }
 
@@ -926,6 +945,12 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   @override
   Widget build(BuildContext context) {
     final currentFiles = _currentFilesFor(selectedTier, tiers);
+    // 标签：每个档位包分别在「常用/本地/云端」中是否存在（按 key 判定）。
+    final presence = Presence(
+      workspace: {for (final item in workspaceItems) item.key},
+      local: {for (final item in localItems) item.key},
+      cloud: {for (final item in remoteItems) item.key},
+    );
     final pages = [
       _ConfigPage(
         path: workspacePath,
@@ -943,7 +968,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
       _WorkspaceSyncPage(
         path: workspacePath,
         items: workspaceItems,
-        diff: workspaceDiff,
+        presence: presence,
         selected: selectedWorkspace,
         onSelectedChanged: (key, checked) => setState(
           () => checked
@@ -956,7 +981,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
       _LocalPage(
         path: localPath,
         items: localItems,
-        diff: diff,
+        presence: presence,
         selected: selectedLocal,
         log: localLog,
         onSelectedChanged: (key, checked) => setState(
@@ -969,7 +994,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         snapshots: localHistory,
         selectedSnapshot: selectedLocalHistory,
         items: localHistoryItems,
-        diff: const DiffResult(),
+        presence: presence,
         selected: selectedLocal,
         log: localLog,
         onSnapshotChanged: (id) => unawaited(_selectLocalHistory(id)),
@@ -986,7 +1011,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         serverUrlController: serverUrlController,
         onTestConnection: _connectServer,
         items: remoteItems,
-        diff: diff,
+        presence: presence,
         selected: selectedRemote,
         onSelectedChanged: (key, checked) => setState(
           () => checked ? selectedRemote.add(key) : selectedRemote.remove(key),
@@ -998,7 +1023,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         snapshots: remoteHistory,
         selectedSnapshot: selectedRemoteHistory,
         items: remoteHistoryItems,
-        diff: const DiffResult(),
+        presence: presence,
         selected: selectedRemote,
         log: remoteLog,
         onSnapshotChanged: (id) => unawaited(_selectRemoteHistory(id)),
@@ -1043,7 +1068,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
               ),
               NavigationRailDestination(
                 icon: Icon(Icons.manage_history_outlined),
-                label: Text('远端历史'),
+                label: Text('云端历史'),
               ),
             ],
           ),
@@ -1151,7 +1176,7 @@ class _WorkspaceSyncPage extends StatelessWidget {
   const _WorkspaceSyncPage({
     required this.path,
     required this.items,
-    required this.diff,
+    required this.presence,
     required this.selected,
     required this.onSelectedChanged,
     required this.onSyncToLocal,
@@ -1160,7 +1185,7 @@ class _WorkspaceSyncPage extends StatelessWidget {
 
   final String path;
   final List<ConfigItem> items;
-  final DiffResult diff;
+  final Presence presence;
   final Set<String> selected;
   final void Function(String key, bool checked) onSelectedChanged;
   final VoidCallback onSyncToLocal;
@@ -1190,7 +1215,7 @@ class _WorkspaceSyncPage extends StatelessWidget {
         ),
         _ConfigList(
           items: items,
-          diff: diff,
+          presence: presence,
           selected: selected,
           onSelectedChanged: onSelectedChanged,
         ),
@@ -1203,7 +1228,7 @@ class _LocalPage extends StatelessWidget {
   const _LocalPage({
     required this.path,
     required this.items,
-    required this.diff,
+    required this.presence,
     required this.selected,
     required this.log,
     required this.onSelectedChanged,
@@ -1213,7 +1238,7 @@ class _LocalPage extends StatelessWidget {
 
   final String path;
   final List<ConfigItem> items;
-  final DiffResult diff;
+  final Presence presence;
   final Set<String> selected;
   final String log;
   final void Function(String key, bool checked) onSelectedChanged;
@@ -1244,7 +1269,7 @@ class _LocalPage extends StatelessWidget {
         ),
         _ConfigList(
           items: items,
-          diff: diff,
+          presence: presence,
           selected: selected,
           onSelectedChanged: onSelectedChanged,
         ),
@@ -1259,7 +1284,7 @@ class _LocalHistoryPage extends StatelessWidget {
     required this.snapshots,
     required this.selectedSnapshot,
     required this.items,
-    required this.diff,
+    required this.presence,
     required this.selected,
     required this.log,
     required this.onSnapshotChanged,
@@ -1272,7 +1297,7 @@ class _LocalHistoryPage extends StatelessWidget {
   final List<HistoryEntry> snapshots;
   final String selectedSnapshot;
   final List<ConfigItem> items;
-  final DiffResult diff;
+  final Presence presence;
   final Set<String> selected;
   final String log;
   final ValueChanged<String> onSnapshotChanged;
@@ -1310,7 +1335,7 @@ class _LocalHistoryPage extends StatelessWidget {
         ),
         _ConfigList(
           items: items,
-          diff: diff,
+          presence: presence,
           selected: selected,
           onSelectedChanged: onSelectedChanged,
         ),
@@ -1327,7 +1352,7 @@ class _RemotePage extends StatelessWidget {
     required this.serverUrlController,
     required this.onTestConnection,
     required this.items,
-    required this.diff,
+    required this.presence,
     required this.selected,
     required this.onSelectedChanged,
     required this.onSyncToWorkspace,
@@ -1339,7 +1364,7 @@ class _RemotePage extends StatelessWidget {
   final TextEditingController serverUrlController;
   final VoidCallback onTestConnection;
   final List<ConfigItem> items;
-  final DiffResult diff;
+  final Presence presence;
   final Set<String> selected;
   final void Function(String key, bool checked) onSelectedChanged;
   final VoidCallback onSyncToWorkspace;
@@ -1399,7 +1424,7 @@ class _RemotePage extends StatelessWidget {
         ),
         _ConfigList(
           items: items,
-          diff: diff,
+          presence: presence,
           selected: selected,
           onSelectedChanged: onSelectedChanged,
         ),
@@ -1413,7 +1438,7 @@ class _RemoteHistoryPage extends StatelessWidget {
     required this.snapshots,
     required this.selectedSnapshot,
     required this.items,
-    required this.diff,
+    required this.presence,
     required this.selected,
     required this.log,
     required this.onSnapshotChanged,
@@ -1426,7 +1451,7 @@ class _RemoteHistoryPage extends StatelessWidget {
   final List<HistoryEntry> snapshots;
   final String selectedSnapshot;
   final List<ConfigItem> items;
-  final DiffResult diff;
+  final Presence presence;
   final Set<String> selected;
   final String log;
   final ValueChanged<String> onSnapshotChanged;
@@ -1438,7 +1463,7 @@ class _RemoteHistoryPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _PageShell(
-      title: '远端历史',
+      title: '云端历史',
       count: '${snapshots.length} 版',
       children: [
         _HistoryToolbar(
@@ -1464,7 +1489,7 @@ class _RemoteHistoryPage extends StatelessWidget {
         ),
         _ConfigList(
           items: items,
-          diff: diff,
+          presence: presence,
           selected: selected,
           onSelectedChanged: onSelectedChanged,
         ),
@@ -1564,13 +1589,13 @@ class _PageShell extends StatelessWidget {
 class _ConfigList extends StatelessWidget {
   const _ConfigList({
     required this.items,
-    required this.diff,
+    required this.presence,
     required this.selected,
     required this.onSelectedChanged,
   });
 
   final List<ConfigItem> items;
-  final DiffResult diff;
+  final Presence presence;
   final Set<String> selected;
   final void Function(String key, bool checked) onSelectedChanged;
 
@@ -1619,7 +1644,8 @@ class _ConfigList extends StatelessWidget {
                     ),
                   ),
                   if (item.files.isNotEmpty) Text('(${item.files.length}个文件)'),
-                  _DiffTag(label: diff.labelFor(item.key)),
+                  for (final tag in presence.tagsFor(item.key))
+                    _PresenceTag(label: tag),
                 ],
               ),
               subtitle: Text(shortSha(item.sha256)),
@@ -1630,15 +1656,29 @@ class _ConfigList extends StatelessWidget {
   }
 }
 
-class _DiffTag extends StatelessWidget {
-  const _DiffTag({required this.label});
+class _PresenceTag extends StatelessWidget {
+  const _PresenceTag({required this.label});
 
   final String label;
+
+  static const _colors = {
+    '常用': Color(0xff3fb950), // workspace
+    '本地': Color(0xff58a6ff), // local repo
+    '云端': Color(0xffd29922), // cloud
+  };
 
   @override
   Widget build(BuildContext context) {
     if (label.isEmpty) return const SizedBox.shrink();
-    return Chip(label: Text(label), visualDensity: VisualDensity.compact);
+    final color = _colors[label] ?? Theme.of(context).colorScheme.outline;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        border: Border.all(color: color),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(label, style: TextStyle(color: color, fontSize: 11)),
+    );
   }
 }
 
@@ -1831,62 +1871,23 @@ class ConfigItem {
   };
 }
 
-class DiffResult {
-  const DiffResult({
-    this.onlyLocal = const [],
-    this.onlyRemote = const [],
-    this.changed = const [],
-    this.same = const [],
+// 档位包在三处的存在情况（按 key 判定）。每命中一处加一个标签：常用/本地/云端。
+class Presence {
+  const Presence({
+    this.workspace = const {},
+    this.local = const {},
+    this.cloud = const {},
   });
 
-  final List<String> onlyLocal;
-  final List<String> onlyRemote;
-  final List<String> changed;
-  final List<String> same;
+  final Set<String> workspace; // 常用（本机 opencode 工作目录）
+  final Set<String> local; // 本地仓库（SQLite）
+  final Set<String> cloud; // 云端仓库（服务器）
 
-  factory DiffResult.fromJson(Map<String, dynamic> json) => DiffResult(
-    onlyLocal: _strings(json['onlyLocal']),
-    onlyRemote: _strings(json['onlyRemote']),
-    changed: _strings(json['changed']),
-    same: _strings(json['same']),
-  );
-
-  factory DiffResult.compare(
-    List<ConfigItem> leftItems,
-    List<ConfigItem> rightItems,
-  ) {
-    final left = {for (final item in leftItems) item.key: item.sha256};
-    final right = {for (final item in rightItems) item.key: item.sha256};
-    final onlyLocal = <String>[];
-    final onlyRemote = <String>[];
-    final changed = <String>[];
-    final same = <String>[];
-    for (final entry in left.entries) {
-      if (!right.containsKey(entry.key)) {
-        onlyLocal.add(entry.key);
-      } else if (right[entry.key] != entry.value) {
-        changed.add(entry.key);
-      } else {
-        same.add(entry.key);
-      }
-    }
-    for (final key in right.keys) {
-      if (!left.containsKey(key)) onlyRemote.add(key);
-    }
-    return DiffResult(
-      onlyLocal: onlyLocal,
-      onlyRemote: onlyRemote,
-      changed: changed,
-      same: same,
-    );
-  }
-
-  String labelFor(String key) {
-    if (onlyLocal.contains(key)) return '仅本地';
-    if (onlyRemote.contains(key)) return '仅云端';
-    if (changed.contains(key)) return '有差异';
-    return '';
-  }
+  List<String> tagsFor(String key) => [
+    if (workspace.contains(key)) '常用',
+    if (local.contains(key)) '本地',
+    if (cloud.contains(key)) '云端',
+  ];
 }
 
 List<ConfigItem> _itemsFrom(Object? items) =>
@@ -1915,9 +1916,6 @@ String _messageFor(Map<String, dynamic> result) =>
     result['error'] is Map<String, dynamic>
     ? ((result['error'] as Map<String, dynamic>)['message']?.toString() ??
           jsonEncode(result))
-    : jsonEncode(result);
-String _logText(Map<String, dynamic> result) => result['log'] is List<dynamic>
-    ? (result['log'] as List<dynamic>).join('\n')
     : jsonEncode(result);
 String _selectedOrFirst(String selected, List<HistoryEntry> items) =>
     items.any((item) => item.id == selected)
