@@ -1,6 +1,6 @@
 // 重启 opencode：杀掉正在运行的 opencode 进程，再在新终端窗口启动 opencode。
 // FR-2。首要支持 macOS（osascript）。其它平台暂返回“未实现”。
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { config } from './config.js';
 
 const DEFAULT_TERM_WAIT_MS = 1200;
@@ -20,8 +20,27 @@ export function parseProcessList(out) {
   return processes;
 }
 
+// Windows 下用 PowerShell 取 pid/ppid/命令行，拼成与 `ps` 同样的 "pid ppid cmd" 行格式。
+// CommandLine 可能为空（系统进程），依次回退到 ExecutablePath、Name，保证 needle 可匹配到
+// 可执行文件路径（OpenCode.exe 的路径含 "opencode"）。
+function readWindowsProcessList() {
+  // 注意：不要用 -replace '\s+'。反斜杠经 Node→powershell.exe 参数传递会丢失，正则退化成
+  // 字面量 's'（大小写不敏感）从而吃掉路径里的所有 s。改用无反斜杠的 .Replace 仅压平 CR/LF。
+  const script =
+    "Get-CimInstance Win32_Process | ForEach-Object { " +
+    "$c = $_.CommandLine; if (-not $c) { $c = $_.ExecutablePath }; if (-not $c) { $c = $_.Name }; " +
+    "$c = ([string]$c).Replace([char]13,' ').Replace([char]10,' '); " +
+    "('{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $c) }";
+  const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return out.replace(/\r/g, '');
+}
+
 function readProcessList() {
   try {
+    if (process.platform === 'win32') return parseProcessList(readWindowsProcessList());
     return parseProcessList(execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' }));
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err), processes: [] };
@@ -167,8 +186,27 @@ function relaunchDarwin({ cwd, launchCmd }) {
   });
 }
 
+// Windows：launchCmd 即 OpenCode.exe 的完整路径（见 config.defaultLaunchCmd）。
+// detached + unref + 忽略 stdio，让桌面应用脱离本进程独立存活。
+function relaunchWin32({ cwd, launchCmd }) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (fn, arg) => { if (!settled) { settled = true; fn(arg); } };
+    try {
+      const child = spawn(launchCmd, [], { cwd, detached: true, stdio: 'ignore', windowsHide: false });
+      child.on('error', (err) => done(reject, new Error(`启动失败: ${err.message}`)));
+      child.unref();
+      // 给 spawn 一点时间冒出 ENOENT 等错误；没报错即视为已拉起。
+      setTimeout(() => done(resolve, true), 300);
+    } catch (err) {
+      done(reject, new Error(`启动失败: ${err.message}`));
+    }
+  });
+}
+
 async function relaunchByPlatform(opts) {
   if (process.platform === 'darwin') return relaunchDarwin(opts);
+  if (process.platform === 'win32') return relaunchWin32(opts);
   throw new Error(`暂未实现的平台重启逻辑: ${process.platform}`);
 }
 

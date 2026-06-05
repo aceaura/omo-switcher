@@ -4,6 +4,16 @@ import path from 'node:path';
 
 const home = os.homedir();
 
+// 各平台启动 opencode desktop 的默认命令/可执行文件。
+function defaultLaunchCmd() {
+  if (process.platform === 'darwin') return 'open -a OpenCode';
+  if (process.platform === 'win32') {
+    const local = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    return path.join(local, 'Programs', '@opencode-aidesktop', 'OpenCode.exe');
+  }
+  return 'opencode';
+}
+
 export const config = {
   // 监听端口（nginx 反代时指向这里）
   port: Number(process.env.OMO_SWITCHER_PORT || 7600),
@@ -61,8 +71,8 @@ export const config = {
   restart: {
     // 用于匹配待杀进程的关键字（在进程命令行中查找）。
     killNeedle: process.env.RESTART_KILL_NEEDLE || 'opencode',
-    // 重启 Desktop 的命令
-    launchCmd: process.env.RESTART_LAUNCH_CMD || 'open -a OpenCode',
+    // 重启 Desktop 的命令（按平台取默认；macOS=open -a，Windows=OpenCode.exe 路径）
+    launchCmd: process.env.RESTART_LAUNCH_CMD || defaultLaunchCmd(),
     // 新终端的工作目录
     launchCwd: process.env.RESTART_LAUNCH_CWD || home,
     launchTimeoutMs: Number(process.env.RESTART_LAUNCH_TIMEOUT_MS || 8000),
