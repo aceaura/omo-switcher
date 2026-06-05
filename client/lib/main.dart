@@ -793,6 +793,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
       });
       _notice('已应用配置: $key');
       await _refreshAll();
+      await _showModelCheckDialog(showWhenEmpty: false);
     } catch (error) {
       setState(() => switchLog = '应用失败: $error');
       _notice('应用失败: $error');
@@ -801,6 +802,36 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
 
   bool _workspaceHasKey(String key) =>
       workspaceItems.any((item) => item.key == key);
+
+  Future<void> _showModelCheckDialog({bool showWhenEmpty = true}) async {
+    List<ModelCheckTarget> targets;
+    try {
+      targets = collectModelCheckTargets(widget.workspace.resolveDir());
+    } catch (error) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('检测连接'),
+          content: Text('读取模型配置失败: $error'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    if (targets.isEmpty && !showWhenEmpty) return;
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _ModelCheckDialog(targets: targets),
+    );
+  }
 
   // 工作目录已本机化：opencode 在本机运行，重启需手动执行（GUI/进程无法可靠代劳）。
   Future<void> _restartDesktop() async {
@@ -1332,6 +1363,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onApplyTier: _applyTier,
         onRestartDesktop: _restartDesktop,
         onRestartTui: _restartTui,
+        onCheckModels: () => unawaited(_showModelCheckDialog()),
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
         searchController: searchController,
@@ -1515,6 +1547,7 @@ class _ConfigPage extends StatelessWidget {
     required this.onApplyTier,
     required this.onRestartDesktop,
     required this.onRestartTui,
+    required this.onCheckModels,
     required this.onRefresh,
     required this.isRefreshing,
     required this.searchController,
@@ -1535,6 +1568,7 @@ class _ConfigPage extends StatelessWidget {
   final VoidCallback onApplyTier;
   final VoidCallback onRestartDesktop;
   final VoidCallback onRestartTui;
+  final VoidCallback onCheckModels;
   final VoidCallback onRefresh;
   final bool isRefreshing;
   final TextEditingController searchController;
@@ -1601,6 +1635,11 @@ class _ConfigPage extends StatelessWidget {
               onPressed: onRestartTui,
               icon: const Icon(Icons.terminal_outlined),
               label: const Text('重启 TUI'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: onCheckModels,
+              icon: const Icon(Icons.fact_check_outlined),
+              label: const Text('检测连接'),
             ),
           ],
         ),
@@ -2680,6 +2719,380 @@ List<String> _currentFilesFor(String selectedTier, List<Tier> tiers) {
     if (tier.slug == selectedTier) return tier.files;
   }
   return tiers.isEmpty ? const [] : tiers.first.files;
+}
+
+class ModelCheckTarget {
+  const ModelCheckTarget({
+    required this.model,
+    required this.variant,
+    required this.locations,
+    required this.providerId,
+    required this.modelId,
+    required this.baseUrl,
+    required this.apiKey,
+    required this.error,
+  });
+
+  final String model;
+  final String? variant;
+  final List<String> locations;
+  final String providerId;
+  final String modelId;
+  final String? baseUrl;
+  final String? apiKey;
+  final String? error;
+
+  String get label => variant == null ? model : '$model / $variant';
+}
+
+class ModelCheckStatus {
+  const ModelCheckStatus.pending() : ok = null, message = '检测中';
+  const ModelCheckStatus.success(this.message) : ok = true;
+  const ModelCheckStatus.failure(this.message) : ok = false;
+
+  final bool? ok;
+  final String message;
+}
+
+class _ModelCheckDialog extends StatefulWidget {
+  const _ModelCheckDialog({required this.targets});
+
+  final List<ModelCheckTarget> targets;
+
+  @override
+  State<_ModelCheckDialog> createState() => _ModelCheckDialogState();
+}
+
+class _ModelCheckDialogState extends State<_ModelCheckDialog> {
+  late final Map<String, ModelCheckStatus> statuses;
+
+  @override
+  void initState() {
+    super.initState();
+    statuses = {
+      for (final target in widget.targets)
+        target.label: const ModelCheckStatus.pending(),
+    };
+    unawaited(_runChecks());
+  }
+
+  Future<void> _runChecks() async {
+    await Future.wait(widget.targets.map(_runOne));
+  }
+
+  Future<void> _runOne(ModelCheckTarget target) async {
+    ModelCheckStatus status;
+    try {
+      final message = await checkModelConnectivity(target);
+      status = ModelCheckStatus.success(message);
+    } catch (error) {
+      status = ModelCheckStatus.failure(error.toString());
+    }
+    if (!mounted) return;
+    setState(() => statuses[target.label] = status);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pending = statuses.values.where((status) => status.ok == null).length;
+    final okCount = statuses.values.where((status) => status.ok == true).length;
+    final failCount = statuses.values
+        .where((status) => status.ok == false)
+        .length;
+    return AlertDialog(
+      title: const Text('检测连接'),
+      content: SizedBox(
+        width: 720,
+        child: widget.targets.isEmpty
+            ? const Text('当前配置没有引用模型。')
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('成功 $okCount / 失败 $failCount / 检测中 $pending'),
+                  const SizedBox(height: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 420),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: widget.targets.length,
+                      separatorBuilder: (_, index) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final target = widget.targets[index];
+                        final status =
+                            statuses[target.label] ??
+                            const ModelCheckStatus.pending();
+                        final color = status.ok == null
+                            ? Theme.of(context).colorScheme.primary
+                            : status.ok == true
+                            ? Colors.green
+                            : Theme.of(context).colorScheme.error;
+                        final icon = status.ok == null
+                            ? const SizedBox.square(
+                                dimension: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Icon(
+                                status.ok == true
+                                    ? Icons.check_circle_outline
+                                    : Icons.cancel_outlined,
+                                color: color,
+                              );
+                        return ListTile(
+                          dense: true,
+                          leading: icon,
+                          title: Text(target.label),
+                          subtitle: Text(
+                            '${target.locations.join(', ')}\n${status.message}',
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+      ],
+    );
+  }
+}
+
+List<ModelCheckTarget> collectModelCheckTargets(Directory opencodeDir) {
+  final providerFile = File(
+    '${opencodeDir.path}${Platform.pathSeparator}opencode.jsonc',
+  );
+  final providerConfig = providerFile.existsSync()
+      ? jsonDecode(_stripJsonc(providerFile.readAsStringSync()))
+            as Map<String, dynamic>
+      : <String, dynamic>{};
+  final providers = providerConfig['provider'] is Map<String, dynamic>
+      ? providerConfig['provider'] as Map<String, dynamic>
+      : <String, dynamic>{};
+
+  final refs =
+      <String, ({String model, String? variant, List<String> locations})>{};
+  for (final fileName in const [
+    'oh-my-openagent.json',
+    'oh-my-opencode-slim.json',
+  ]) {
+    final file = File('${opencodeDir.path}${Platform.pathSeparator}$fileName');
+    if (!file.existsSync()) continue;
+    final cfg =
+        jsonDecode(_stripBom(file.readAsStringSync())) as Map<String, dynamic>;
+    for (final ref in _collectModelRefs(cfg, fileName)) {
+      final key = '${ref.model}|${ref.variant ?? ''}';
+      final prev = refs[key];
+      refs[key] = (
+        model: ref.model,
+        variant: ref.variant,
+        locations: [...(prev?.locations ?? const <String>[]), ref.where],
+      );
+    }
+  }
+
+  return refs.values.map((ref) {
+    final slash = ref.model.indexOf('/');
+    final providerId = slash <= 0 ? '' : ref.model.substring(0, slash);
+    final modelId = slash <= 0 ? ref.model : ref.model.substring(slash + 1);
+    final provider = providers[providerId] is Map<String, dynamic>
+        ? providers[providerId] as Map<String, dynamic>
+        : null;
+    final baseUrl = provider == null
+        ? null
+        : _firstString(provider, const [
+            'baseURL',
+            'baseUrl',
+            'base_url',
+            'apiBase',
+            'api_base',
+            'endpoint',
+            'url',
+          ]);
+    final apiKey = provider == null
+        ? null
+        : _firstString(provider, const [
+            'apiKey',
+            'api_key',
+            'apikey',
+            'token',
+            'accessToken',
+            'access_token',
+          ]);
+    final error = slash <= 0
+        ? '模型 ID 应为 provider/model'
+        : provider == null
+        ? 'provider 未在 opencode.jsonc 定义: $providerId'
+        : baseUrl == null
+        ? 'provider 缺少 baseURL/baseUrl/base_url'
+        : null;
+    return ModelCheckTarget(
+      model: ref.model,
+      variant: ref.variant,
+      locations: ref.locations,
+      providerId: providerId,
+      modelId: modelId,
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+      error: error,
+    );
+  }).toList()..sort((a, b) => a.label.compareTo(b.label));
+}
+
+Future<String> checkModelConnectivity(ModelCheckTarget target) async {
+  if (target.error != null) throw Exception(target.error);
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+  try {
+    final request = await client
+        .postUrl(_chatCompletionsUri(target.baseUrl!))
+        .timeout(const Duration(seconds: 10));
+    request.headers.contentType = ContentType.json;
+    if (target.apiKey != null && target.apiKey!.isNotEmpty) {
+      request.headers.set('Authorization', 'Bearer ${target.apiKey}');
+    }
+    request.write(
+      jsonEncode({
+        'model': target.modelId,
+        'messages': const [
+          {'role': 'user', 'content': 'ping'},
+        ],
+        'max_tokens': 1,
+        'temperature': 0,
+      }),
+    );
+    final response = await request.close().timeout(const Duration(seconds: 30));
+    final text = await response.transform(utf8.decoder).join();
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return '请求成功 (${response.statusCode})';
+    }
+    throw Exception('HTTP ${response.statusCode}: ${_shortText(text)}');
+  } finally {
+    client.close(force: true);
+  }
+}
+
+Uri _chatCompletionsUri(String baseUrl) {
+  final trimmed = baseUrl.replaceFirst(RegExp(r'/+$'), '');
+  if (trimmed.endsWith('/chat/completions')) return Uri.parse(trimmed);
+  return Uri.parse('$trimmed/chat/completions');
+}
+
+String _shortText(String text) {
+  final oneLine = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+  return oneLine.length <= 180 ? oneLine : '${oneLine.substring(0, 180)}...';
+}
+
+List<({String model, String? variant, String where})> _collectModelRefs(
+  Map<String, dynamic> cfg,
+  String fileName,
+) {
+  final refs = <({String model, String? variant, String where})>[];
+
+  void visit(Object? node, String where) {
+    if (node is Map<String, dynamic>) {
+      final model = node['model'];
+      if (model is String) {
+        refs.add((
+          model: model,
+          variant: node['variant']?.toString(),
+          where: '$fileName:$where',
+        ));
+      }
+      final fallbacks = node['fallback_models'];
+      if (fallbacks is List) {
+        for (var i = 0; i < fallbacks.length; i++) {
+          final fb = fallbacks[i];
+          if (fb is String) {
+            refs.add((
+              model: fb,
+              variant: null,
+              where: '$fileName:$where.fallback[$i]',
+            ));
+          } else if (fb is Map<String, dynamic> && fb['model'] is String) {
+            refs.add((
+              model: fb['model'] as String,
+              variant: fb['variant']?.toString(),
+              where: '$fileName:$where.fallback[$i]',
+            ));
+          }
+        }
+      }
+      for (final entry in node.entries) {
+        if (entry.key == 'fallback_models') continue;
+        visit(entry.value, where.isEmpty ? entry.key : '$where.${entry.key}');
+      }
+      return;
+    }
+    if (node is List) {
+      for (var i = 0; i < node.length; i++) {
+        visit(node[i], '$where[$i]');
+      }
+    }
+  }
+
+  visit(cfg, '');
+  return refs;
+}
+
+String? _firstString(Map<String, dynamic> obj, List<String> keys) {
+  for (final key in keys) {
+    final value = _configString(obj[key]);
+    if (value != null) return value;
+  }
+  final options = obj['options'];
+  if (options is Map<String, dynamic>) return _firstString(options, keys);
+  return null;
+}
+
+String? _configString(Object? value) {
+  if (value is String) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
+    String? envName;
+    final envMatch = RegExp(
+      r'^(?:\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?|\{env:([A-Za-z_][A-Za-z0-9_]*)\}|env:([A-Za-z_][A-Za-z0-9_]*))$',
+    ).firstMatch(trimmed);
+    if (envMatch != null) {
+      for (final group in envMatch.groups([1, 2, 3])) {
+        if (group != null) {
+          envName = group;
+          break;
+        }
+      }
+    }
+    if (envName != null) {
+      final envValue = Platform.environment[envName]?.trim();
+      return envValue == null || envValue.isEmpty ? null : envValue;
+    }
+    return trimmed;
+  }
+  if (value is Map<String, dynamic>) {
+    for (final key in const ['env', 'environment', 'name', 'value']) {
+      final nested = _configString(value[key]);
+      if (nested != null) return nested;
+    }
+  }
+  return null;
+}
+
+String _stripBom(String text) =>
+    text.startsWith('\ufeff') ? text.substring(1) : text;
+
+String _stripJsonc(String text) {
+  var out = _stripBom(text);
+  out = out.replaceAll(RegExp(r'/\*[\s\S]*?\*/'), '');
+  out = out.replaceAllMapped(
+    RegExp(r'(^|[^:])//[^\n]*', multiLine: true),
+    (m) => m.group(1) ?? '',
+  );
+  out = out.replaceAllMapped(RegExp(r',(\s*[}\]])'), (m) => m.group(1) ?? '');
+  return out;
 }
 
 String _two(int value) => value.toString().padLeft(2, '0');

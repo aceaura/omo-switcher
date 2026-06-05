@@ -174,11 +174,17 @@ void main() {
         File('${dir.path}${Platform.pathSeparator}local-only.zip').existsSync(),
         isTrue,
       );
+      final appliedOmo =
+          jsonDecode(
+                File(
+                  '${dir.path}${Platform.pathSeparator}oh-my-openagent.json',
+                ).readAsStringSync(),
+              )
+              as Map;
+      expect(appliedOmo['omo'], 'balanced');
       expect(
-        File(
-          '${dir.path}${Platform.pathSeparator}oh-my-openagent.json',
-        ).readAsStringSync(),
-        _balancedFiles['oh-my-openagent.json'],
+        appliedOmo['disabled_skills'],
+        containsAll(['security-research', 'security-review']),
       );
       expect(find.textContaining('已应用配置: local-only'), findsOneWidget);
     },

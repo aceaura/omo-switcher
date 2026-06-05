@@ -47,6 +47,13 @@ const Map<String, TierMeta> kTierMeta = {
 };
 
 final RegExp _slugRe = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$');
+const List<String> _requiredDisabledSkills = [
+  'security-research',
+  'security-review',
+];
+const Map<String, String> _requiredPackageDeps = {
+  'oh-my-opencode-slim': '^1.1.1',
+};
 
 bool _isSafeSlug(String slug) => _slugRe.hasMatch(slug);
 
@@ -262,7 +269,7 @@ class LocalWorkspace {
       if (!file.isFile) continue;
       final normalized = _normalizeBundleName(slug, file.name);
       if (normalized == null) continue;
-      out[normalized] = file.content;
+      out[normalized] = _normalizeMemberContent(normalized, file.content);
     }
     return out;
   }
@@ -281,6 +288,80 @@ class LocalWorkspace {
     return null;
   }
 
+  List<int> _normalizeMemberContent(String name, List<int> content) {
+    try {
+      if (name == '${kProviderPrefixes['omo']}.json') {
+        return _normalizeOmoConfig(content);
+      }
+      if (name == 'package.json') return _normalizePackageJson(content);
+    } catch (_) {
+      return content;
+    }
+    return content;
+  }
+
+  List<int> _normalizeOmoConfig(List<int> content) {
+    final parsed = _decodeJson(content);
+    final obj = parsed.obj;
+    final current = obj['disabled_skills'] is List
+        ? List<Object?>.from(obj['disabled_skills'] as List)
+        : <Object?>[];
+    final merged = [...current];
+    for (final skill in _requiredDisabledSkills) {
+      if (!merged.contains(skill)) merged.add(skill);
+    }
+    if (obj['disabled_skills'] is List && merged.length == current.length) {
+      return content;
+    }
+    obj['disabled_skills'] = merged;
+    final ordered = <String, Object?>{};
+    if (obj.containsKey(r'$schema')) {
+      for (final entry in obj.entries) {
+        if (entry.key == 'disabled_skills') continue;
+        ordered[entry.key] = entry.value;
+        if (entry.key == r'$schema') ordered['disabled_skills'] = merged;
+      }
+    } else {
+      ordered['disabled_skills'] = merged;
+      for (final entry in obj.entries) {
+        if (entry.key != 'disabled_skills') ordered[entry.key] = entry.value;
+      }
+    }
+    return _encodeJson(ordered, parsed.hadBom);
+  }
+
+  List<int> _normalizePackageJson(List<int> content) {
+    final parsed = _decodeJson(content);
+    final obj = parsed.obj;
+    final deps = obj['dependencies'] is Map
+        ? Map<String, Object?>.from(obj['dependencies'] as Map)
+        : <String, Object?>{};
+    var changed = false;
+    for (final entry in _requiredPackageDeps.entries) {
+      if (!deps.containsKey(entry.key) || deps[entry.key] == null) {
+        deps[entry.key] = entry.value;
+        changed = true;
+      }
+    }
+    if (!changed) return content;
+    obj['dependencies'] = deps;
+    return _encodeJson(obj, parsed.hadBom);
+  }
+
+  ({Map<String, dynamic> obj, bool hadBom}) _decodeJson(List<int> content) {
+    var text = utf8.decode(content);
+    final hadBom = text.startsWith('\ufeff');
+    if (hadBom) text = text.substring(1);
+    return (obj: jsonDecode(text) as Map<String, dynamic>, hadBom: hadBom);
+  }
+
+  List<int> _encodeJson(Map<String, Object?> obj, bool hadBom) {
+    final prefix = hadBom ? '\ufeff' : '';
+    return utf8.encode(
+      '$prefix${const JsonEncoder.withIndent('  ').convert(obj)}\n',
+    );
+  }
+
   // 镜像 presets.js detectActive：读 base 文件 <prefix>.json，与各 zip 同名成员字节比对。
   String? _detectActive(
     Directory dir,
@@ -289,7 +370,10 @@ class LocalWorkspace {
   ) {
     final baseFile = File('${dir.path}${Platform.pathSeparator}$prefix.json');
     if (!baseFile.existsSync()) return null;
-    final baseBytes = baseFile.readAsBytesSync();
+    final baseBytes = _normalizeMemberContent(
+      '$prefix.json',
+      baseFile.readAsBytesSync(),
+    );
     for (final entry in bundleEntries.entries) {
       final member = entry.value['$prefix.json'];
       if (member != null && _bytesEqual(member, baseBytes)) return entry.key;

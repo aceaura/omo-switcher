@@ -141,7 +141,12 @@ void main() {
         '${dir.path}${Platform.pathSeparator}oh-my-openagent.json',
       );
       expect(omo.existsSync(), isTrue);
-      expect(omo.readAsStringSync(), _tokenSaving['oh-my-openagent.json']);
+      final omoConfig = jsonDecode(omo.readAsStringSync()) as Map;
+      expect(omoConfig['omo'], 'token-saving');
+      expect(
+        omoConfig['disabled_skills'],
+        containsAll(['security-research', 'security-review']),
+      );
       // 应用后 active 应为 token-saving。
       final state = await LocalWorkspace(directory: dir).getState();
       expect(state.active['shared'], 'token-saving');
