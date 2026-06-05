@@ -103,6 +103,37 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('filters config items while typing in keyword search', (
+    tester,
+  ) async {
+    final dir = _makeWorkspace(tester);
+    final api = FakeApi();
+    final store = MemoryStore({'server_url': 'http://127.0.0.1:7600'});
+
+    await tester.pumpWidget(
+      MyApp(
+        api: api,
+        workspace: LocalWorkspace(directory: dir),
+        store: store,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('常用配置').first);
+    await tester.pumpAndSettle();
+    expect(find.text('balanced'), findsWidgets);
+
+    await tester.enterText(find.widgetWithText(TextField, '关键字搜索'), 'no-match');
+    await tester.pumpAndSettle();
+    expect(find.text('balanced'), findsNothing);
+    expect(find.text('0/1 项'), findsOneWidget);
+
+    await tester.enterText(find.widgetWithText(TextField, '关键字搜索'), 'bal');
+    await tester.pumpAndSettle();
+    expect(find.text('balanced'), findsWidgets);
+    expect(find.text('1/1 项'), findsOneWidget);
+  });
+
   testWidgets('syncs workspace->local, local->cloud, cloud->local', (
     tester,
   ) async {

@@ -539,6 +539,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   final selectedLocal = <String>{};
   final selectedRemote = <String>{};
   final serverUrlController = TextEditingController();
+  final searchController = TextEditingController();
+  String searchQuery = '';
   bool isRefreshing = false;
 
   @override
@@ -550,6 +552,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   @override
   void dispose() {
     serverUrlController.dispose();
+    searchController.dispose();
     super.dispose();
   }
 
@@ -733,7 +736,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _syncCloudToWorkspace() async {
-    final keys = _defaultKeys(selectedRemote, remoteItems);
+    final keys = _defaultKeys(selectedRemote, _visibleItems(remoteItems));
     if (keys.isEmpty) return _notice('云端没有可同步的配置项');
     final confirmed = await _confirm(
       '同步到常用配置',
@@ -755,7 +758,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _pushWorkspaceToRemote() async {
-    final keys = _defaultKeys(selectedWorkspace, workspaceItems);
+    final keys = _defaultKeys(selectedWorkspace, _visibleItems(workspaceItems));
     if (keys.isEmpty) return _notice('工作目录没有可上传的配置项');
     final confirmed = await _confirm(
       '同步到云端仓库',
@@ -791,7 +794,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _deleteWorkspaceItems() async {
-    final keys = _defaultKeys(selectedWorkspace, workspaceItems);
+    final keys = _defaultKeys(selectedWorkspace, _visibleItems(workspaceItems));
     if (keys.isEmpty) return _notice('常用配置没有可删除的配置项');
     final confirmed = await _confirm(
       '删除常用配置',
@@ -808,7 +811,10 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _renameWorkspaceItem() async {
-    final key = _singleSelectedKey(selectedWorkspace, workspaceItems);
+    final key = _singleSelectedKey(
+      selectedWorkspace,
+      _visibleItems(workspaceItems),
+    );
     if (key == null) return _notice('请选择 1 个常用配置进行重命名');
     final newKey = await _promptRename(key);
     if (newKey == null) return;
@@ -827,7 +833,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _downloadWorkspaceToLocal() async {
-    final keys = _defaultKeys(selectedWorkspace, workspaceItems);
+    final keys = _defaultKeys(selectedWorkspace, _visibleItems(workspaceItems));
     if (keys.isEmpty) return _notice('工作目录没有可下载的配置项');
     final byKey = {for (final item in workspaceItems) item.key: item};
     final items = <ConfigItem>[];
@@ -853,7 +859,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _uploadLocalToWorkspace() async {
-    final keys = _defaultKeys(selectedLocal, localItems);
+    final keys = _defaultKeys(selectedLocal, _visibleItems(localItems));
     if (keys.isEmpty) return _notice('本地仓库没有可同步的配置项');
     final confirmed = await _confirm(
       '同步到常用配置',
@@ -883,7 +889,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _pullRemoteToLocal() async {
-    final keys = _defaultKeys(selectedRemote, remoteItems);
+    final keys = _defaultKeys(selectedRemote, _visibleItems(remoteItems));
     if (keys.isEmpty) return _notice('云端仓库没有可同步的配置项');
     final items = <ConfigItem>[];
     for (final key in keys) {
@@ -900,7 +906,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _pushLocalToRemote() async {
-    final keys = _defaultKeys(selectedLocal, localItems);
+    final keys = _defaultKeys(selectedLocal, _visibleItems(localItems));
     if (keys.isEmpty) return _notice('本地仓库没有可同步的配置项');
     final confirmed = await _confirm(
       '同步到云端仓库',
@@ -927,7 +933,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _deleteLocalItems() async {
-    final keys = _defaultKeys(selectedLocal, localItems);
+    final keys = _defaultKeys(selectedLocal, _visibleItems(localItems));
     if (keys.isEmpty) return _notice('本地仓库没有可删除的配置项');
     final confirmed = await _confirm(
       '删除本地仓库配置',
@@ -943,7 +949,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _renameLocalItem() async {
-    final key = _singleSelectedKey(selectedLocal, localItems);
+    final key = _singleSelectedKey(selectedLocal, _visibleItems(localItems));
     if (key == null) return _notice('请选择 1 个本地仓库配置进行重命名');
     final newKey = await _promptRename(key);
     if (newKey == null) return;
@@ -994,7 +1000,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _deleteRemoteItems() async {
-    final keys = _defaultKeys(selectedRemote, remoteItems);
+    final keys = _defaultKeys(selectedRemote, _visibleItems(remoteItems));
     if (keys.isEmpty) return _notice('云端仓库没有可删除的配置项');
     final confirmed = await _confirm(
       '删除云端仓库配置',
@@ -1016,7 +1022,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _renameRemoteItem() async {
-    final key = _singleSelectedKey(selectedRemote, remoteItems);
+    final key = _singleSelectedKey(selectedRemote, _visibleItems(remoteItems));
     if (key == null) return _notice('请选择 1 个云端仓库配置进行重命名');
     final newKey = await _promptRename(key);
     if (newKey == null) return;
@@ -1040,7 +1046,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _syncLocalHistoryToWorkspace() async {
-    final keys = _defaultKeys(selectedLocal, localHistoryItems);
+    final keys = _defaultKeys(selectedLocal, _visibleItems(localHistoryItems));
     if (keys.isEmpty) return _notice('本地历史没有可同步的配置项');
     final confirmed = await _confirm(
       '同步到常用配置',
@@ -1061,7 +1067,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _pushLocalHistoryToRemote() async {
-    final keys = _defaultKeys(selectedLocal, localHistoryItems);
+    final keys = _defaultKeys(selectedLocal, _visibleItems(localHistoryItems));
     if (keys.isEmpty) return _notice('本地历史没有可同步的配置项');
     final items = [
       for (final item in localHistoryItems)
@@ -1086,7 +1092,10 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _syncRemoteHistoryToWorkspace() async {
-    final keys = _defaultKeys(selectedRemote, remoteHistoryItems);
+    final keys = _defaultKeys(
+      selectedRemote,
+      _visibleItems(remoteHistoryItems),
+    );
     if (selectedRemoteHistory.isEmpty || keys.isEmpty) {
       return _notice('云端历史没有可同步的配置项');
     }
@@ -1110,7 +1119,10 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
   }
 
   Future<void> _syncRemoteHistoryToLocal() async {
-    final keys = _defaultKeys(selectedRemote, remoteHistoryItems);
+    final keys = _defaultKeys(
+      selectedRemote,
+      _visibleItems(remoteHistoryItems),
+    );
     if (selectedRemoteHistory.isEmpty || keys.isEmpty) {
       return _notice('云端历史没有可同步的配置项');
     }
@@ -1191,9 +1203,37 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  void _setSearchQuery(String value) {
+    setState(() => searchQuery = value);
+  }
+
+  void _clearSearchQuery() {
+    if (searchQuery.isEmpty) return;
+    searchController.clear();
+    setState(() => searchQuery = '');
+  }
+
+  List<ConfigItem> _visibleItems(List<ConfigItem> items) =>
+      _filterConfigItems(items, searchQuery);
+
   @override
   Widget build(BuildContext context) {
     final currentFiles = _currentFilesFor(selectedTier, tiers);
+    final filteredCurrentFiles = _filterStrings(currentFiles, searchQuery);
+    final filteredWorkspaceItems = _filterConfigItems(
+      workspaceItems,
+      searchQuery,
+    );
+    final filteredLocalItems = _filterConfigItems(localItems, searchQuery);
+    final filteredRemoteItems = _filterConfigItems(remoteItems, searchQuery);
+    final filteredLocalHistoryItems = _filterConfigItems(
+      localHistoryItems,
+      searchQuery,
+    );
+    final filteredRemoteHistoryItems = _filterConfigItems(
+      remoteHistoryItems,
+      searchQuery,
+    );
     // 标签：每个档位包分别在「常用/本地/云端」中是否存在（按 key 判定）。
     final presence = Presence(
       workspace: {for (final item in workspaceItems) item.key},
@@ -1205,7 +1245,8 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         path: workspacePath,
         tiers: tiers,
         selectedTier: selectedTier,
-        currentFiles: currentFiles,
+        currentFiles: filteredCurrentFiles,
+        totalFiles: currentFiles.length,
         switchLog: switchLog,
         restartDesktopLog: restartDesktopLog,
         restartTuiLog: restartTuiLog,
@@ -1215,10 +1256,15 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onRestartTui: _restartTui,
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
+        searchController: searchController,
+        searchQuery: searchQuery,
+        onSearchChanged: _setSearchQuery,
+        onClearSearch: _clearSearchQuery,
       ),
       _WorkspaceSyncPage(
         path: workspacePath,
-        items: workspaceItems,
+        items: filteredWorkspaceItems,
+        totalItems: workspaceItems.length,
         presence: presence,
         selected: selectedWorkspace,
         onSelectedChanged: (key, checked) => setState(
@@ -1232,10 +1278,15 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onDelete: _deleteWorkspaceItems,
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
+        searchController: searchController,
+        searchQuery: searchQuery,
+        onSearchChanged: _setSearchQuery,
+        onClearSearch: _clearSearchQuery,
       ),
       _LocalPage(
         path: localPath,
-        items: localItems,
+        items: filteredLocalItems,
+        totalItems: localItems.length,
         presence: presence,
         selected: selectedLocal,
         log: localLog,
@@ -1248,11 +1299,16 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onDelete: _deleteLocalItems,
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
+        searchController: searchController,
+        searchQuery: searchQuery,
+        onSearchChanged: _setSearchQuery,
+        onClearSearch: _clearSearchQuery,
       ),
       _LocalHistoryPage(
         snapshots: localHistory,
         selectedSnapshot: selectedLocalHistory,
-        items: localHistoryItems,
+        items: filteredLocalHistoryItems,
+        totalItems: localHistoryItems.length,
         presence: presence,
         selected: selectedLocal,
         log: localLog,
@@ -1265,13 +1321,18 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onPushRemote: _pushLocalHistoryToRemote,
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
+        searchController: searchController,
+        searchQuery: searchQuery,
+        onSearchChanged: _setSearchQuery,
+        onClearSearch: _clearSearchQuery,
       ),
       _RemotePage(
         serverUrl: serverUrl,
         connectionStatus: connectionStatus,
         serverUrlController: serverUrlController,
         onTestConnection: _connectServer,
-        items: remoteItems,
+        items: filteredRemoteItems,
+        totalItems: remoteItems.length,
         presence: presence,
         selected: selectedRemote,
         log: remoteLog,
@@ -1284,11 +1345,16 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onDelete: _deleteRemoteItems,
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
+        searchController: searchController,
+        searchQuery: searchQuery,
+        onSearchChanged: _setSearchQuery,
+        onClearSearch: _clearSearchQuery,
       ),
       _RemoteHistoryPage(
         snapshots: remoteHistory,
         selectedSnapshot: selectedRemoteHistory,
-        items: remoteHistoryItems,
+        items: filteredRemoteHistoryItems,
+        totalItems: remoteHistoryItems.length,
         presence: presence,
         selected: selectedRemote,
         log: remoteLog,
@@ -1301,6 +1367,10 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
         onSyncToLocal: _syncRemoteHistoryToLocal,
         onRefresh: () => unawaited(_refreshFromUi()),
         isRefreshing: isRefreshing,
+        searchController: searchController,
+        searchQuery: searchQuery,
+        onSearchChanged: _setSearchQuery,
+        onClearSearch: _clearSearchQuery,
       ),
     ];
 
@@ -1354,6 +1424,7 @@ class _ConfigPage extends StatelessWidget {
     required this.tiers,
     required this.selectedTier,
     required this.currentFiles,
+    required this.totalFiles,
     required this.switchLog,
     required this.restartDesktopLog,
     required this.restartTuiLog,
@@ -1363,12 +1434,17 @@ class _ConfigPage extends StatelessWidget {
     required this.onRestartTui,
     required this.onRefresh,
     required this.isRefreshing,
+    required this.searchController,
+    required this.searchQuery,
+    required this.onSearchChanged,
+    required this.onClearSearch,
   });
 
   final String path;
   final List<Tier> tiers;
   final String selectedTier;
   final List<String> currentFiles;
+  final int totalFiles;
   final String switchLog;
   final String restartDesktopLog;
   final String restartTuiLog;
@@ -1378,6 +1454,10 @@ class _ConfigPage extends StatelessWidget {
   final VoidCallback onRestartTui;
   final VoidCallback onRefresh;
   final bool isRefreshing;
+  final TextEditingController searchController;
+  final String searchQuery;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onClearSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -1386,6 +1466,10 @@ class _ConfigPage extends StatelessWidget {
       count: '${tiers.length} 档',
       onRefresh: onRefresh,
       isRefreshing: isRefreshing,
+      searchController: searchController,
+      searchQuery: searchQuery,
+      onSearchChanged: onSearchChanged,
+      onClearSearch: onClearSearch,
       children: [
         Text(path),
         const SizedBox(height: 8),
@@ -1440,7 +1524,12 @@ class _ConfigPage extends StatelessWidget {
         _LogBox(text: switchLog),
         _LogBox(text: restartDesktopLog),
         _LogBox(text: restartTuiLog),
-        _FileList(title: '当前配置文件', files: currentFiles),
+        _FileList(
+          title: '当前配置文件',
+          files: currentFiles,
+          totalFiles: totalFiles,
+          isFiltered: searchQuery.trim().isNotEmpty,
+        ),
       ],
     );
   }
@@ -1450,6 +1539,7 @@ class _WorkspaceSyncPage extends StatelessWidget {
   const _WorkspaceSyncPage({
     required this.path,
     required this.items,
+    required this.totalItems,
     required this.presence,
     required this.selected,
     required this.onSelectedChanged,
@@ -1459,10 +1549,15 @@ class _WorkspaceSyncPage extends StatelessWidget {
     required this.onDelete,
     required this.onRefresh,
     required this.isRefreshing,
+    required this.searchController,
+    required this.searchQuery,
+    required this.onSearchChanged,
+    required this.onClearSearch,
   });
 
   final String path;
   final List<ConfigItem> items;
+  final int totalItems;
   final Presence presence;
   final Set<String> selected;
   final void Function(String key, bool checked) onSelectedChanged;
@@ -1472,14 +1567,22 @@ class _WorkspaceSyncPage extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onRefresh;
   final bool isRefreshing;
+  final TextEditingController searchController;
+  final String searchQuery;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onClearSearch;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '常用配置',
-      count: '${items.length} 项',
+      count: _countLabel(items.length, totalItems, '项', searchQuery),
       onRefresh: onRefresh,
       isRefreshing: isRefreshing,
+      searchController: searchController,
+      searchQuery: searchQuery,
+      onSearchChanged: onSearchChanged,
+      onClearSearch: onClearSearch,
       children: [
         Text(path),
         const SizedBox(height: 8),
@@ -1522,6 +1625,7 @@ class _LocalPage extends StatelessWidget {
   const _LocalPage({
     required this.path,
     required this.items,
+    required this.totalItems,
     required this.presence,
     required this.selected,
     required this.log,
@@ -1532,10 +1636,15 @@ class _LocalPage extends StatelessWidget {
     required this.onDelete,
     required this.onRefresh,
     required this.isRefreshing,
+    required this.searchController,
+    required this.searchQuery,
+    required this.onSearchChanged,
+    required this.onClearSearch,
   });
 
   final String path;
   final List<ConfigItem> items;
+  final int totalItems;
   final Presence presence;
   final Set<String> selected;
   final String log;
@@ -1546,14 +1655,22 @@ class _LocalPage extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onRefresh;
   final bool isRefreshing;
+  final TextEditingController searchController;
+  final String searchQuery;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onClearSearch;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '本地仓库',
-      count: '${items.length} 项',
+      count: _countLabel(items.length, totalItems, '项', searchQuery),
       onRefresh: onRefresh,
       isRefreshing: isRefreshing,
+      searchController: searchController,
+      searchQuery: searchQuery,
+      onSearchChanged: onSearchChanged,
+      onClearSearch: onClearSearch,
       children: [
         if (path.isNotEmpty) Text(path),
         const SizedBox(height: 8),
@@ -1598,6 +1715,7 @@ class _LocalHistoryPage extends StatelessWidget {
     required this.snapshots,
     required this.selectedSnapshot,
     required this.items,
+    required this.totalItems,
     required this.presence,
     required this.selected,
     required this.log,
@@ -1608,11 +1726,16 @@ class _LocalHistoryPage extends StatelessWidget {
     required this.onPushRemote,
     required this.onRefresh,
     required this.isRefreshing,
+    required this.searchController,
+    required this.searchQuery,
+    required this.onSearchChanged,
+    required this.onClearSearch,
   });
 
   final List<HistoryEntry> snapshots;
   final String selectedSnapshot;
   final List<ConfigItem> items;
+  final int totalItems;
   final Presence presence;
   final Set<String> selected;
   final String log;
@@ -1623,14 +1746,23 @@ class _LocalHistoryPage extends StatelessWidget {
   final VoidCallback onPushRemote;
   final VoidCallback onRefresh;
   final bool isRefreshing;
+  final TextEditingController searchController;
+  final String searchQuery;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onClearSearch;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '本地历史',
-      count: '${snapshots.length} 版',
+      count:
+          '${snapshots.length} 版 / ${_countLabel(items.length, totalItems, '项', searchQuery)}',
       onRefresh: onRefresh,
       isRefreshing: isRefreshing,
+      searchController: searchController,
+      searchQuery: searchQuery,
+      onSearchChanged: onSearchChanged,
+      onClearSearch: onClearSearch,
       children: [
         _HistoryToolbar(
           snapshots: snapshots,
@@ -1672,6 +1804,7 @@ class _RemotePage extends StatelessWidget {
     required this.serverUrlController,
     required this.onTestConnection,
     required this.items,
+    required this.totalItems,
     required this.presence,
     required this.selected,
     required this.log,
@@ -1682,6 +1815,10 @@ class _RemotePage extends StatelessWidget {
     required this.onDelete,
     required this.onRefresh,
     required this.isRefreshing,
+    required this.searchController,
+    required this.searchQuery,
+    required this.onSearchChanged,
+    required this.onClearSearch,
   });
 
   final String serverUrl;
@@ -1689,6 +1826,7 @@ class _RemotePage extends StatelessWidget {
   final TextEditingController serverUrlController;
   final VoidCallback onTestConnection;
   final List<ConfigItem> items;
+  final int totalItems;
   final Presence presence;
   final Set<String> selected;
   final String log;
@@ -1699,14 +1837,22 @@ class _RemotePage extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onRefresh;
   final bool isRefreshing;
+  final TextEditingController searchController;
+  final String searchQuery;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onClearSearch;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '云端仓库',
-      count: '${items.length} 项',
+      count: _countLabel(items.length, totalItems, '项', searchQuery),
       onRefresh: onRefresh,
       isRefreshing: isRefreshing,
+      searchController: searchController,
+      searchQuery: searchQuery,
+      onSearchChanged: onSearchChanged,
+      onClearSearch: onClearSearch,
       children: [
         Row(
           children: [
@@ -1781,6 +1927,7 @@ class _RemoteHistoryPage extends StatelessWidget {
     required this.snapshots,
     required this.selectedSnapshot,
     required this.items,
+    required this.totalItems,
     required this.presence,
     required this.selected,
     required this.log,
@@ -1791,11 +1938,16 @@ class _RemoteHistoryPage extends StatelessWidget {
     required this.onSyncToLocal,
     required this.onRefresh,
     required this.isRefreshing,
+    required this.searchController,
+    required this.searchQuery,
+    required this.onSearchChanged,
+    required this.onClearSearch,
   });
 
   final List<HistoryEntry> snapshots;
   final String selectedSnapshot;
   final List<ConfigItem> items;
+  final int totalItems;
   final Presence presence;
   final Set<String> selected;
   final String log;
@@ -1806,14 +1958,23 @@ class _RemoteHistoryPage extends StatelessWidget {
   final VoidCallback onSyncToLocal;
   final VoidCallback onRefresh;
   final bool isRefreshing;
+  final TextEditingController searchController;
+  final String searchQuery;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onClearSearch;
 
   @override
   Widget build(BuildContext context) {
     return _PageShell(
       title: '云端历史',
-      count: '${snapshots.length} 版',
+      count:
+          '${snapshots.length} 版 / ${_countLabel(items.length, totalItems, '项', searchQuery)}',
       onRefresh: onRefresh,
       isRefreshing: isRefreshing,
+      searchController: searchController,
+      searchQuery: searchQuery,
+      onSearchChanged: onSearchChanged,
+      onClearSearch: onClearSearch,
       children: [
         _HistoryToolbar(
           snapshots: snapshots,
@@ -1911,6 +2072,10 @@ class _PageShell extends StatelessWidget {
     required this.children,
     required this.onRefresh,
     required this.isRefreshing,
+    required this.searchController,
+    required this.searchQuery,
+    required this.onSearchChanged,
+    required this.onClearSearch,
   });
 
   final String title;
@@ -1918,6 +2083,10 @@ class _PageShell extends StatelessWidget {
   final List<Widget> children;
   final VoidCallback onRefresh;
   final bool isRefreshing;
+  final TextEditingController searchController;
+  final String searchQuery;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onClearSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -1942,6 +2111,30 @@ class _PageShell extends StatelessWidget {
               label: const Text('刷新'),
             ),
           ],
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: searchController,
+          onChanged: onSearchChanged,
+          decoration: InputDecoration(
+            labelText: '关键字搜索',
+            hintText: '输入名称、标签、sha 或文件名自动过滤',
+            prefixIcon: const Icon(Icons.search_outlined),
+            suffixIcon: searchQuery.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: '清空搜索',
+                    onPressed: onClearSearch,
+                    icon: const Icon(Icons.close_outlined),
+                  ),
+            border: const OutlineInputBorder(),
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 10,
+            ),
+          ),
+          textInputAction: TextInputAction.search,
         ),
         const SizedBox(height: 8),
         ...children.expand((child) => [child, const SizedBox(height: 8)]),
@@ -2067,10 +2260,17 @@ class _LogBox extends StatelessWidget {
 }
 
 class _FileList extends StatelessWidget {
-  const _FileList({required this.title, required this.files});
+  const _FileList({
+    required this.title,
+    required this.files,
+    required this.totalFiles,
+    required this.isFiltered,
+  });
 
   final String title;
   final List<String> files;
+  final int totalFiles;
+  final bool isFiltered;
 
   @override
   Widget build(BuildContext context) {
@@ -2078,6 +2278,11 @@ class _FileList extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(title, style: Theme.of(context).textTheme.titleSmall),
+        if (isFiltered)
+          Text(
+            '显示 ${files.length}/$totalFiles 个文件',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         const SizedBox(height: 6),
         if (files.isEmpty)
           const Text('0 个文件')
@@ -2311,6 +2516,43 @@ String _selectedOrFirst(String selected, List<HistoryEntry> items) =>
     : items.isEmpty
     ? ''
     : items.first.id;
+String _countLabel(int filtered, int total, String unit, String query) =>
+    query.trim().isEmpty ? '$total $unit' : '$filtered/$total $unit';
+List<String> _filterStrings(List<String> items, String query) {
+  final needle = query.trim().toLowerCase();
+  if (needle.isEmpty) return items;
+  return [
+    for (final item in items)
+      if (item.toLowerCase().contains(needle)) item,
+  ];
+}
+
+List<ConfigItem> _filterConfigItems(List<ConfigItem> items, String query) {
+  final needle = query.trim().toLowerCase();
+  if (needle.isEmpty) return items;
+  return [
+    for (final item in items)
+      if (_matchesConfigItem(item, needle)) item,
+  ];
+}
+
+bool _matchesConfigItem(ConfigItem item, String needle) {
+  final values = [
+    item.key,
+    item.label,
+    item.sha256,
+    item.provider,
+    item.tierSlug,
+    item.tierIndex?.toString(),
+    item.size?.toString(),
+    item.source,
+    ...item.files,
+  ];
+  return values.whereType<String>().any(
+    (value) => value.toLowerCase().contains(needle),
+  );
+}
+
 List<String> _currentFilesFor(String selectedTier, List<Tier> tiers) {
   for (final tier in tiers) {
     if (tier.slug == selectedTier) return tier.files;
