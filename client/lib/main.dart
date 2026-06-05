@@ -1930,9 +1930,8 @@ class _PageShell extends StatelessWidget {
             const Spacer(),
             if (count.isNotEmpty)
               Chip(label: Text(count), visualDensity: VisualDensity.compact),
-            const SizedBox(width: 6),
-            IconButton(
-              tooltip: '刷新',
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
               onPressed: isRefreshing ? null : onRefresh,
               icon: isRefreshing
                   ? const SizedBox.square(
@@ -1940,6 +1939,7 @@ class _PageShell extends StatelessWidget {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.refresh_outlined),
+              label: const Text('刷新'),
             ),
           ],
         ),
