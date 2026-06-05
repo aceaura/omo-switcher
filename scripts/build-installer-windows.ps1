@@ -14,6 +14,16 @@ $Wxs = Join-Path $WorkDir "omo-switcher.wxs"
 $License = Join-Path $WorkDir "License.rtf"
 $Msi = Join-Path $OutDir "omo-switcher-windows-setup.msi"
 $Wix = Join-Path $Root ".tools\wix.exe"
+$Pubspec = Join-Path $Client "pubspec.yaml"
+$VersionLine = Select-String -Path $Pubspec -Pattern "^\s*version:\s*(.+)\s*$" | Select-Object -First 1
+if (-not $VersionLine) {
+  throw "Could not read version from $Pubspec"
+}
+$AppVersion = $VersionLine.Matches[0].Groups[1].Value.Trim()
+$MsiVersion = ($AppVersion -split "\+")[0]
+if ($MsiVersion -notmatch "^\d+\.\d+\.\d+$") {
+  throw "MSI package version must be major.minor.patch, got: $MsiVersion"
+}
 
 if (-not $SkipBuild) {
   $flutterCommand = Get-Command "flutter" -ErrorAction SilentlyContinue
@@ -119,7 +129,7 @@ $licenseEscaped = XmlEscape $License
 @"
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <Package Name="omo-switcher" Manufacturer="aceaura" Version="1.0.0" UpgradeCode="{9E1C03B2-52F5-4B70-B3E8-4A1F87396E8F}" Scope="perMachine">
+  <Package Name="omo-switcher" Manufacturer="aceaura" Version="$MsiVersion" UpgradeCode="{9E1C03B2-52F5-4B70-B3E8-4A1F87396E8F}" Scope="perMachine">
     <MajorUpgrade DowngradeErrorMessage="A newer version of omo-switcher is already installed." />
     <MediaTemplate EmbedCab="yes" />
     <Icon Id="AppIcon.ico" SourceFile="$icon" />
