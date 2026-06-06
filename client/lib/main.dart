@@ -832,6 +832,7 @@ class _OmoSwitcherHomeState extends State<OmoSwitcherHome> {
     try {
       final log = await widget.workspace.applyTier(selectedTier);
       setState(() => switchLog = '已应用「$selectedTier」:\n${log.join('\n')}');
+      unawaited(_showModelCheckDialog(showWhenEmpty: false));
     } catch (error) {
       setState(() => switchLog = '切换失败: $error');
     }
