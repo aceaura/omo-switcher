@@ -3064,39 +3064,113 @@ Future<String> checkModelConnectivity(ModelCheckTarget target) async {
   if (target.error != null) throw Exception(target.error);
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
   try {
-    final request = await client
-        .postUrl(_chatCompletionsUri(target.baseUrl!))
-        .timeout(const Duration(seconds: 10));
-    request.headers.contentType = ContentType.json;
-    if (target.apiKey != null && target.apiKey!.isNotEmpty) {
-      request.headers.set('Authorization', 'Bearer ${target.apiKey}');
+    final failures = <String>[];
+    for (final uri in _chatCompletionsUris(target.baseUrl!)) {
+      for (final probe in _modelCheckProbes(target.modelId)) {
+        final request = await client
+            .postUrl(uri)
+            .timeout(const Duration(seconds: 10));
+        request.headers.contentType = ContentType.json;
+        if (target.apiKey != null && target.apiKey!.isNotEmpty) {
+          request.headers.set('Authorization', 'Bearer ${target.apiKey}');
+        }
+        request.write(jsonEncode(probe.body));
+        try {
+          final response = await request.close().timeout(
+            const Duration(seconds: 30),
+          );
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            return '请求成功 (${response.statusCode}, ${uri.path}, ${probe.label})';
+          }
+          final text = await response.transform(utf8.decoder).join();
+          failures.add(
+            '${uri.path} ${probe.label}: HTTP ${response.statusCode}: ${_shortText(text)}',
+          );
+        } on SocketException catch (error) {
+          failures.add('${uri.path} ${probe.label}: ${error.message}');
+        } on HttpException catch (error) {
+          failures.add('${uri.path} ${probe.label}: ${error.message}');
+        } on TimeoutException {
+          failures.add('${uri.path} ${probe.label}: 请求超时');
+        }
+      }
     }
-    request.write(
-      jsonEncode({
-        'model': target.modelId,
-        'messages': const [
-          {'role': 'user', 'content': 'ping'},
-        ],
-        'max_tokens': 1,
-        'temperature': 0,
-      }),
-    );
-    final response = await request.close().timeout(const Duration(seconds: 30));
-    final text = await response.transform(utf8.decoder).join();
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return '请求成功 (${response.statusCode})';
-    }
-    throw Exception('HTTP ${response.statusCode}: ${_shortText(text)}');
+    throw Exception(failures.join(' ; '));
   } finally {
     client.close(force: true);
   }
 }
 
-Uri _chatCompletionsUri(String baseUrl) {
+List<({String label, Map<String, Object> body})> _modelCheckProbes(
+  String modelId,
+) => [
+  (
+    label: 'non-stream',
+    body: {
+      'model': modelId,
+      'messages': const [
+        {'role': 'user', 'content': 'ping'},
+      ],
+      'max_tokens': 1,
+    },
+  ),
+  (
+    label: 'stream',
+    body: {
+      'model': modelId,
+      'messages': const [
+        {'role': 'user', 'content': 'ping'},
+      ],
+      'stream': true,
+    },
+  ),
+];
+
+List<Uri> _chatCompletionsUris(String baseUrl) {
   final trimmed = baseUrl.replaceFirst(RegExp(r'/+$'), '');
-  if (trimmed.endsWith('/chat/completions')) return Uri.parse(trimmed);
-  return Uri.parse('$trimmed/chat/completions');
+  final base = Uri.parse(trimmed);
+  final segments = base.pathSegments
+      .where((segment) => segment.isNotEmpty)
+      .toList(growable: false);
+  if (_hasPathSuffix(segments, const ['chat', 'completions'])) {
+    return [base];
+  }
+
+  final suffixes = _isVersionSegment(segments.lastOrNull)
+      ? const [
+          ['chat', 'completions'],
+        ]
+      : const [
+          ['v1', 'chat', 'completions'],
+          ['chat', 'completions'],
+        ];
+  return suffixes
+      .map((suffix) => _appendPathSegments(base, suffix))
+      .toSet()
+      .toList(growable: false);
 }
+
+Uri _appendPathSegments(Uri base, List<String> suffix) => base.replace(
+  pathSegments: [
+    ...base.pathSegments.where((segment) => segment.isNotEmpty),
+    ...suffix,
+  ],
+  query: '',
+  fragment: '',
+);
+
+bool _hasPathSuffix(List<String> segments, List<String> suffix) {
+  if (segments.length < suffix.length) return false;
+  final start = segments.length - suffix.length;
+  for (var i = 0; i < suffix.length; i++) {
+    if (segments[start + i].toLowerCase() != suffix[i]) return false;
+  }
+  return true;
+}
+
+bool _isVersionSegment(String? segment) =>
+    segment != null &&
+    RegExp(r'^v\d+(?:\.\d+)?$').hasMatch(segment.toLowerCase());
 
 String _shortText(String text) {
   final oneLine = text.replaceAll(RegExp(r'\s+'), ' ').trim();
