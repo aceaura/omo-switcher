@@ -33,7 +33,7 @@ npm run client
 ```
 可选启用持久化版本库：`brew install redis && brew services start redis`。
 
-### 安装器
+### 安装器（本地构建）
 ```bash
 # Windows: 生成图形界面的 release/installer/omo-switcher-windows-setup.msi
 # 需要 .NET SDK；脚本会在 .tools/ 下安装 WiX Toolset。
@@ -43,6 +43,25 @@ npm run installer:windows
 # 使用 Xcode Command Line Tools 的 pkgbuild；安装目录为 /Applications。
 npm run installer:macos
 ```
+
+### 发布与下载（GitHub Releases）
+推送 `vX.Y.Z` 标签会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)，
+在 `windows-latest` 与 `macos-latest` 上分别构建 MSI / PKG，并作为 GitHub Release
+资产发布。触发脚本会从 `client/pubspec.yaml` 读取版本号并打标签推送：
+
+```bash
+npm run release            # 用 pubspec 版本打 vX.Y.Z 标签并推送（触发构建+发布）
+npm run release -- --tag v1.2.3   # 自定义标签
+npm run release:dispatch   # 不打标签，直接用 gh CLI 手动触发 workflow
+```
+
+构建通过后，二进制可在以下稳定地址直接下载（始终指向最新 Release）：
+
+- Windows：`https://github.com/aceaura/omo-switcher/releases/latest/download/omo-switcher-windows-setup.msi`
+- macOS：`https://github.com/aceaura/omo-switcher/releases/latest/download/omo-switcher-macos.pkg`
+
+> 安装器未做代码签名（CI 无证书）。macOS 首次打开请右键 →「打开」以绕过 Gatekeeper；
+> Windows 会出现 SmartScreen 提示，选择「仍要运行」。
 
 ### Docker（服务端 + Redis）
 ```bash

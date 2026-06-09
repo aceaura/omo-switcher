@@ -14,7 +14,9 @@
     "test:client": "cd client && flutter test",
     "test": "node --test tests/*.test.js",
     "installer:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-installer-windows.ps1",
-    "installer:macos": "bash scripts/build-installer-macos.sh"
+    "installer:macos": "bash scripts/build-installer-macos.sh",
+    "release": "node scripts/trigger-release.mjs",
+    "release:dispatch": "node scripts/trigger-release.mjs --dispatch"
   },
   "license": "MIT"
 }

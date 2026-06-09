@@ -1,0 +1,121 @@
+name: release
+
+# Builds the Windows (.msi) and macOS (.pkg) installers and publishes them as a
+# GitHub Release so users can download the binaries directly, e.g.:
+#   https://github.com/aceaura/omo-switcher/releases/latest/download/omo-switcher-windows-setup.msi
+#   https://github.com/aceaura/omo-switcher/releases/latest/download/omo-switcher-macos.pkg
+#
+# Triggered by pushing a version tag (vX.Y.Z) — see scripts/trigger-release.mjs —
+# or manually from the Actions tab (workflow_dispatch). A manual run with an empty
+# "tag" input just builds the installers as artifacts without publishing a release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.6). Leave blank to only build artifacts.'
+        required: false
+        default: ''
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Resolve client dependencies
+        working-directory: client
+        run: flutter pub get
+
+      - name: Build Windows installer (MSI)
+        shell: pwsh
+        run: ./scripts/build-installer-windows.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: release/installer/omo-switcher-windows-setup.msi
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Enable macOS desktop
+        run: flutter config --enable-macos-desktop
+
+      - name: Resolve client dependencies
+        working-directory: client
+        run: flutter pub get
+
+      - name: Build macOS installer (pkg)
+        run: bash scripts/build-installer-macos.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: release/installer/omo-switcher-macos.pkg
+          if-no-files-found: error
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    # Only publish a release when invoked from a tag, or a manual run that supplied one.
+    if: github.ref_type == 'tag' || github.event.inputs.tag != ''
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          echo "Releasing $TAG"
+
+          mapfile -t ASSETS < <(find artifacts -type f \( -name '*.msi' -o -name '*.pkg' \))
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "No installer artifacts found" >&2
+            exit 1
+          fi
+          echo "Assets: ${ASSETS[*]}"
+
+          # Tags like v1.0.6-rc1 are published as pre-releases.
+          EXTRA=""
+          case "$TAG" in *-*) EXTRA="--prerelease";; esac
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" \
+              --generate-notes $EXTRA
+          fi
