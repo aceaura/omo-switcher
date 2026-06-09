@@ -63,6 +63,8 @@ npm run release:dispatch   # 不打标签，直接用 gh CLI 手动触发 workfl
 > 安装器未做代码签名（CI 无证书）。macOS 首次打开请右键 →「打开」以绕过 Gatekeeper；
 > Windows 会出现 SmartScreen 提示，选择「仍要运行」。
 
+完整发布流程见 [`doc/release.md`](doc/release.md)。
+
 ### Docker（服务端 + Redis）
 ```bash
 # 把宿主机的 opencode 配置目录挂入容器；OPENCODE_DIR 可覆盖
